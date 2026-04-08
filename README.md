@@ -27,6 +27,7 @@ Package Ninja is a small CLI that runs normal package-manager commands through a
 - Zero-config default path for day-to-day local development.
 - Clean lifecycle handling for startup, interruption, and teardown.
 - Safe by default: local bind, temporary config injection, guarded publish flow.
+- Interactive `dots` spinner during session preparation in TTY terminals.
 
 ### Showcase: Where It Shines
 
@@ -135,14 +136,20 @@ Scope note: `--script` applies to `dev` and `test`; `--install` and `--no-instal
 
 | Scenario | Direct npm | Package Ninja (ephemeral) | Difference |
 | --- | --- | --- | --- |
-| small install (1 dep) | ~2.0s | ~5.2s | +~3.2s |
-| medium install (8 deps) | ~3.8s | ~8.8s | +~5.0s |
+| small install (1 dep) | ~1.8s | ~4.5s | +~2.7s |
+| medium install (8 deps) | ~2.9s | ~7.3s | +~4.4s |
+
+Typical fixed-cost profile per fresh ephemeral run:
+
+- session startup: ~1.7s
+- command wrapper/process handoff: ~0.7s to ~1.0s
+- session stop: ~0.01s
 
 Back-to-back command demo:
 
-- Two ephemeral `package-ninja run` commands: ~6.9s total
-- Warm-session reuse (`--persistent` + reuse + `stop`): ~4.0s total
-- Net improvement with reuse in that run: ~42%
+- Two ephemeral installs (small): ~9.0s total
+- Warm-session reuse (`--persistent` + second run + `stop`): ~6.4s total
+- Net improvement with reuse in that run: ~29%
 
 Plain-language summary:
 

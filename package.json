@@ -29,6 +29,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "cli-spinners": "^3.4.0",
     "package-ninja-registry-runtime": "npm:verdaccio@^6.1.6"
   },
   "devDependencies": {

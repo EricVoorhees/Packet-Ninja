@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { InstallMode, PackageManager } from "./project.js";
 import { formatStatus, readStatus, runWithSession, startSession, stopSession } from "./session.js";
+import { runSpinnerTask } from "./spinner.js";
 import { executeProjectCommand } from "./workflow.js";
 
 type CommandName = "start" | "run" | "stop" | "status" | "install" | "dev" | "test" | "publish" | "help";
@@ -33,7 +34,16 @@ export async function main(): Promise<void> {
   switch (parsed.command) {
     case "start": {
       printHeader();
-      const state = await startSession(parsed);
+      const state = await runSpinnerTask(
+        "Starting Package Ninja session...",
+        async () => await startSession(parsed),
+        {
+          fallbackLine: (message) => {
+            console.log(message);
+          },
+          successMessage: "Package Ninja session ready"
+        }
+      );
       console.log("Package Ninja active");
       console.log(`Registry: ${state.registryUrl}`);
       console.log(`Mode: ${state.persistent ? "persistent" : "ephemeral"}`);

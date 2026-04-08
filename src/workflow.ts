@@ -10,6 +10,7 @@ import {
   resolveScriptName
 } from "./project.js";
 import { acquireSession, runCommandInSession, SessionOptions } from "./session.js";
+import { runSpinnerTask } from "./spinner.js";
 import { SessionState } from "./state.js";
 
 export type ProjectCommandName = "install" | "dev" | "test" | "publish";
@@ -38,12 +39,20 @@ export async function executeProjectCommand(
   reporter: ProjectExecutionReporter
 ): Promise<ProjectExecutionResult> {
   const project = await loadProjectContext(options.cwd, options.packageManager);
-  const lease = await acquireSession({
-    rootDir: options.cwd,
-    port: options.port,
-    persistent: options.persistent,
-    offline: options.offline
-  });
+  const lease = await runSpinnerTask(
+    "Preparing local registry session...",
+    async () =>
+      await acquireSession({
+        rootDir: options.cwd,
+        port: options.port,
+        persistent: options.persistent,
+        offline: options.offline
+      }),
+    {
+      fallbackLine: reporter.line.bind(reporter),
+      successMessage: "Local registry session ready"
+    }
+  );
 
   const sessionMode = lease.state.persistent ? "persistent" : "ephemeral";
 

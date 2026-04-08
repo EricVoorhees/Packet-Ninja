@@ -13,8 +13,8 @@ Small/medium install comparison (`npm install --ignore-scripts --no-audit --no-f
 
 | Scenario | Direct npm | Package Ninja (ephemeral) |
 | --- | --- | --- |
-| small (1 dep) | ~2.0s | ~5.2s |
-| medium (8 deps) | ~3.8s | ~8.8s |
+| small (1 dep) | ~1.8s | ~4.5s |
+| medium (8 deps) | ~2.9s | ~7.3s |
 
 Interpretation:
 
@@ -23,10 +23,10 @@ Interpretation:
 
 ## Latency Budget (Phase Breakdown)
 
-From direct phase probes:
+From direct phase probes (current build):
 
-1. Registry startup (`startSession` + ready handshake): ~2.3s to ~2.9s  
-2. Command worker overhead (`runCommandInSession` wrapper path): ~0.8s to ~1.2s  
+1. Registry startup (`startSession` + ready handshake): ~1.7s average  
+2. Command worker overhead (`runCommandInSession` wrapper path): ~0.7s to ~1.0s  
 3. Actual package-manager work: variable by dependency set/network/cache
 
 Most of the "why is this slower than direct npm?" answer is in #1.
@@ -47,15 +47,15 @@ Measured before and after the safe Windows command-worker change:
 
 | Scenario | Before | After | Improvement |
 | --- | --- | --- | --- |
-| small install (ephemeral) | ~6.1s | ~5.2s | ~14.7% faster |
-| medium install (ephemeral) | ~9.6s | ~8.8s | ~8.3% faster |
+| small install (ephemeral) | ~6.1s | ~4.5s | ~26% faster |
+| medium install (ephemeral) | ~9.6s | ~7.3s | ~24% faster |
 
-Measured warm-session reuse (`run` command):
+Measured warm-session reuse (`install` command, two-install sequence):
 
 | Pattern | Total |
 | --- | --- |
-| two ephemeral runs | ~6.9s |
-| `--persistent` first run + reuse + stop | ~4.0s |
+| two ephemeral installs (small) | ~9.0s |
+| `--persistent` first install + reused install + stop | ~6.4s |
 
 Interpretation:
 
