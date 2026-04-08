@@ -131,6 +131,7 @@ Scope note: `--script` applies to `dev` and `test`; `--install` and `--no-instal
 - If you run several commands in a row, use `--persistent` on the first command (or `start`) and reuse the same session.
 - Session reuse usually gives the biggest practical speed win because registry startup is paid once.
 - Detailed performance analysis: [`docs/performance-deep-dive.md`](docs/performance-deep-dive.md)
+- Startup architecture options and migration paths: [`docs/startup-architecture-options.md`](docs/startup-architecture-options.md)
 
 ### Performance Snapshot (Windows, April 8, 2026)
 
@@ -155,6 +156,16 @@ Plain-language summary:
 
 - The first command pays session startup cost.
 - Reuse mode removes most of that repeated startup penalty.
+
+### State Output
+
+Package Ninja now prints explicit phase lines so you always know what is happening and where:
+
+- `State: project.inspecting | command=install | root=...`
+- `State: session.preparing | persistent=false | offline=false`
+- `State: session.started | registry=http://127.0.0.1:... | mode=ephemeral`
+- `State: command.start | name=install | manager=pnpm`
+- `State: command.done | name=install | exitCode=0`
 
 Example:
 

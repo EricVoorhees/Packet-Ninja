@@ -34,6 +34,7 @@ export async function main(): Promise<void> {
   switch (parsed.command) {
     case "start": {
       printHeader();
+      console.log(`State: session.starting | root=${parsed.rootDir}`);
       const state = await runSpinnerTask(
         "Starting Package Ninja session...",
         async () => await startSession(parsed),
@@ -44,6 +45,7 @@ export async function main(): Promise<void> {
           successMessage: "Package Ninja session ready"
         }
       );
+      console.log(`State: session.ready | registry=${state.registryUrl} | mode=${state.persistent ? "persistent" : "ephemeral"}`);
       console.log("Package Ninja active");
       console.log(`Registry: ${state.registryUrl}`);
       console.log(`Mode: ${state.persistent ? "persistent" : "ephemeral"}`);
@@ -144,12 +146,15 @@ export async function main(): Promise<void> {
     }
 
     case "stop": {
+      console.log(`State: session.stopping | root=${parsed.rootDir}`);
       const stopped = await stopSession(parsed.rootDir);
       if (!stopped) {
+        console.log("State: session.idle");
         console.log("Package Ninja is not running.");
         return;
       }
 
+      console.log(`State: session.stopped | registry=${stopped.registryUrl}`);
       console.log("Package Ninja stopped.");
       console.log(`Registry: ${stopped.registryUrl}`);
       return;

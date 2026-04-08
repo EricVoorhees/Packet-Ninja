@@ -33,12 +33,42 @@ export interface ProjectExecutionResult {
   reusedSession: boolean;
 }
 
+function reportState(
+  reporter: ProjectExecutionReporter,
+  state: string,
+  details: Record<string, string | number | boolean | undefined> = {}
+): void {
+  const detailText = Object.entries(details)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" | ");
+
+  if (detailText.length === 0) {
+    reporter.line(`State: ${state}`);
+    return;
+  }
+
+  reporter.line(`State: ${state} | ${detailText}`);
+}
+
 export async function executeProjectCommand(
   commandName: ProjectCommandName,
   options: ProjectExecutionOptions,
   reporter: ProjectExecutionReporter
 ): Promise<ProjectExecutionResult> {
+  reportState(reporter, "project.inspecting", { command: commandName, root: options.cwd });
   const project = await loadProjectContext(options.cwd, options.packageManager);
+  reportState(reporter, "project.ready", {
+    manager: project.packageManager,
+    managerSource: project.packageManagerSource,
+    root: project.rootDir
+  });
+
+  reportState(reporter, "session.preparing", {
+    persistent: options.persistent,
+    offline: options.offline
+  });
+
   const lease = await runSpinnerTask(
     "Preparing local registry session...",
     async () =>
@@ -55,6 +85,10 @@ export async function executeProjectCommand(
   );
 
   const sessionMode = lease.state.persistent ? "persistent" : "ephemeral";
+  reportState(reporter, lease.owned ? "session.started" : "session.reused", {
+    registry: lease.state.registryUrl,
+    mode: sessionMode
+  });
 
   reporter.line("Package Ninja active");
   reporter.line(`Registry: ${lease.state.registryUrl}`);
@@ -74,9 +108,11 @@ export async function executeProjectCommand(
   try {
     switch (commandName) {
       case "install": {
+        reportState(reporter, "command.start", { name: "install", manager: project.packageManager });
         reporter.line("Running install...");
         const command = buildInstallCommand(project, options.passthroughArgs);
         exitCode = await runCommandInSession(lease.state, command.command, command.args, { cwd: project.rootDir });
+        reportState(reporter, "command.done", { name: "install", exitCode });
         break;
       }
 
@@ -100,26 +136,32 @@ export async function executeProjectCommand(
           }
         }
 
+        reportState(reporter, "command.start", { name: scriptName, manager: project.packageManager });
         reporter.line(`Running ${scriptName}...`);
         const command = buildScriptCommand(project, scriptName, options.passthroughArgs, "dev");
         exitCode = await runCommandInSession(lease.state, command.command, command.args, { cwd: project.rootDir });
+        reportState(reporter, "command.done", { name: scriptName, exitCode });
         break;
       }
 
       case "test": {
         const scriptName = resolveScriptName(project, "test", options.scriptName);
+        reportState(reporter, "command.start", { name: scriptName, manager: project.packageManager });
         reporter.line(`Running ${scriptName}...`);
         const command = buildScriptCommand(project, scriptName, options.passthroughArgs, "test");
         exitCode = await runCommandInSession(lease.state, command.command, command.args, { cwd: project.rootDir });
+        reportState(reporter, "command.done", { name: scriptName, exitCode });
         break;
       }
 
       case "publish": {
         ensureSafePublishRegistry(project, lease.state.registryUrl);
+        reportState(reporter, "command.start", { name: "publish", manager: project.packageManager });
         reporter.line("Running publish...");
         reporter.line(`Target registry: ${lease.state.registryUrl}`);
         const command = buildPublishCommand(project, options.passthroughArgs);
         exitCode = await runCommandInSession(lease.state, command.command, command.args, { cwd: project.rootDir });
+        reportState(reporter, "command.done", { name: "publish", exitCode });
         break;
       }
     }
@@ -132,8 +174,10 @@ export async function executeProjectCommand(
   } finally {
     await lease.release();
     if (lease.shouldStopOnRelease) {
+      reportState(reporter, "session.stopped", { registry: lease.state.registryUrl });
       reporter.line("Package Ninja stopped.");
     } else if (lease.owned && lease.state.persistent) {
+      reportState(reporter, "session.idle", { registry: lease.state.registryUrl, mode: "persistent" });
       reporter.line("Session kept active for reuse. Run `package-ninja stop` when finished.");
     }
   }
