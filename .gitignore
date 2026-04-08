@@ -1,0 +1,8 @@
+dist/
+node_modules/
+.package-ninja/
+.pnpm-store/
+.smoke-fixture/
+.verify-*/
+_tmp_*
+package-ninja-*.tgz
