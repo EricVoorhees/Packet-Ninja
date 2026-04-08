@@ -132,6 +132,7 @@ Scope note: `--script` applies to `dev` and `test`; `--install` and `--no-instal
 - Session reuse usually gives the biggest practical speed win because registry startup is paid once.
 - Detailed performance analysis: [`docs/performance-deep-dive.md`](docs/performance-deep-dive.md)
 - Startup architecture options and migration paths: [`docs/startup-architecture-options.md`](docs/startup-architecture-options.md)
+- Phase 2 Go harness spec: [`docs/phase2-go-harness-spec.md`](docs/phase2-go-harness-spec.md)
 
 ### Performance Snapshot (Windows, April 8, 2026)
 
@@ -285,6 +286,32 @@ For direct local execution in this repo:
 node dist/cli.js dev --cwd D:/Projects/my-app
 node dist/cli.js test --cwd D:/Projects/my-app -- --watch
 node dist/cli.js publish --cwd D:/Projects/my-package
+```
+
+### Experimental Go Runner (Stage 1)
+
+Build the Go command worker:
+
+```bash
+npm run build:go-worker
+```
+
+Use it behind the feature flag:
+
+```bash
+PACKAGE_NINJA_USE_GO_RUNNER=1 node dist/cli.js install --cwd D:/Projects/my-app
+```
+
+PowerShell equivalent:
+
+```bash
+$env:PACKAGE_NINJA_USE_GO_RUNNER='1'; node dist/cli.js install --cwd D:/Projects/my-app
+```
+
+Optional explicit binary path override:
+
+```bash
+PACKAGE_NINJA_USE_GO_RUNNER=1 PACKAGE_NINJA_GO_WORKER_PATH=D:/PackageNinja/bin/command-worker-go.exe node dist/cli.js test --cwd D:/Projects/my-app
 ```
 
 ## Closing Line

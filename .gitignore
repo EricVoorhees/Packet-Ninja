@@ -6,3 +6,4 @@ node_modules/
 .verify-*/
 _tmp_*
 package-ninja-*.tgz
+bin/

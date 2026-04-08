@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { constants } from "node:fs";
@@ -44,6 +44,8 @@ const OWNED_SESSION_PID_ENV = "PACKAGE_NINJA_INTERNAL_OWNED_SESSION_PID_PATH";
 const COMMAND_WORKER_PID_ENV = "PACKAGE_NINJA_INTERNAL_COMMAND_WORKER_PID_PATH";
 const FOREGROUND_PARENT_PID_ENV = "PACKAGE_NINJA_INTERNAL_FOREGROUND_PARENT_PID";
 const REGISTRY_SIGNAL_ENV = "VER" + "DACCIO_HANDLE_KILL_SIGNALS";
+const USE_GO_RUNNER_ENV = "PACKAGE_NINJA_USE_GO_RUNNER";
+const GO_WORKER_PATH_ENV = "PACKAGE_NINJA_GO_WORKER_PATH";
 
 export async function startSession(options: SessionOptions): Promise<SessionState> {
   const paths = resolveProjectPaths(options.rootDir);
@@ -335,7 +337,7 @@ async function runChildCommand(
 ): Promise<number> {
   const runtimeDir = path.dirname(npmrcPath);
   const manifestPath = path.join(runtimeDir, `command-worker-${randomUUID()}.json`);
-  const workerPath = fileURLToPath(new URL("./command-worker.js", import.meta.url));
+  const nodeWorkerPath = fileURLToPath(new URL("./command-worker.js", import.meta.url));
   const commandEnv = {
     ...process.env,
     PACKAGE_NINJA_REGISTRY_URL: registryUrl,
@@ -364,13 +366,22 @@ async function runChildCommand(
     "utf8"
   );
 
+  const goWorkerPath = await resolveGoWorkerPath();
+
   return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [workerPath, manifestPath], {
-      cwd,
-      stdio: "inherit",
-      windowsHide: process.platform === "win32",
-      env: commandEnv
-    });
+    const child = goWorkerPath
+      ? spawn(goWorkerPath, [manifestPath], {
+          cwd,
+          stdio: "inherit",
+          windowsHide: process.platform === "win32",
+          env: commandEnv
+        })
+      : spawn(process.execPath, [nodeWorkerPath, manifestPath], {
+          cwd,
+          stdio: "inherit",
+          windowsHide: process.platform === "win32",
+          env: commandEnv
+        });
 
     void maybeWriteInternalPid(COMMAND_WORKER_PID_ENV, child.pid ?? -1);
 
@@ -471,6 +482,41 @@ async function runChildCommand(
       finish(code ?? 0);
     });
   });
+}
+
+async function resolveGoWorkerPath(): Promise<string | null> {
+  if (process.env[USE_GO_RUNNER_ENV] !== "1") {
+    return null;
+  }
+
+  const explicitPath = process.env[GO_WORKER_PATH_ENV];
+  if (explicitPath) {
+    return await pathExists(explicitPath) ? explicitPath : null;
+  }
+
+  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const candidates = [
+    path.join(packageRoot, "bin", process.platform === "win32" ? "command-worker-go.exe" : "command-worker-go"),
+    path.join(packageRoot, "bin", "command-worker-go.exe"),
+    path.join(packageRoot, "bin", "command-worker-go")
+  ];
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await access(targetPath, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 interface LaunchOptions {

@@ -13,6 +13,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:go-worker": "node scripts/build-go-worker.mjs",
     "dev": "tsx src/cli.ts",
     "test": "npm run build && node dist/selftest.js"
   },
