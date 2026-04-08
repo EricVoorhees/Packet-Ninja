@@ -28,6 +28,12 @@ Package Ninja is a small CLI that runs normal package-manager commands through a
 - Clean lifecycle handling for startup, interruption, and teardown.
 - Safe by default: local bind, temporary config injection, guarded publish flow.
 
+### Showcase: Where It Shines
+
+- Repeated local command runs with clean session reuse.
+- Safer publish workflows with local-registry guardrails.
+- Team workflows that need predictable, disposable package environments.
+
 <p align="center">
   <img src="images/packages-3.jpg" alt="Package manager compatibility visual" width="88%" />
 </p>
@@ -124,6 +130,24 @@ Scope note: `--script` applies to `dev` and `test`; `--install` and `--no-instal
 - If you run several commands in a row, use `--persistent` on the first command (or `start`) and reuse the same session.
 - Session reuse usually gives the biggest practical speed win because registry startup is paid once.
 - Detailed performance analysis: [`docs/performance-deep-dive.md`](docs/performance-deep-dive.md)
+
+### Performance Snapshot (Windows, April 8, 2026)
+
+| Scenario | Direct npm | Package Ninja (ephemeral) | Difference |
+| --- | --- | --- | --- |
+| small install (1 dep) | ~2.0s | ~5.2s | +~3.2s |
+| medium install (8 deps) | ~3.8s | ~8.8s | +~5.0s |
+
+Back-to-back command demo:
+
+- Two ephemeral `package-ninja run` commands: ~6.9s total
+- Warm-session reuse (`--persistent` + reuse + `stop`): ~4.0s total
+- Net improvement with reuse in that run: ~42%
+
+Plain-language summary:
+
+- The first command pays session startup cost.
+- Reuse mode removes most of that repeated startup penalty.
 
 Example:
 

@@ -41,6 +41,27 @@ Result:
 - Lower per-command overhead.
 - Reliability preserved (`npm test` full selftest still passes).
 
+## Recent Optimization Impact
+
+Measured before and after the safe Windows command-worker change:
+
+| Scenario | Before | After | Improvement |
+| --- | --- | --- | --- |
+| small install (ephemeral) | ~6.1s | ~5.2s | ~14.7% faster |
+| medium install (ephemeral) | ~9.6s | ~8.8s | ~8.3% faster |
+
+Measured warm-session reuse (`run` command):
+
+| Pattern | Total |
+| --- | --- |
+| two ephemeral runs | ~6.9s |
+| `--persistent` first run + reuse + stop | ~4.0s |
+
+Interpretation:
+
+- Reuse is currently the highest-impact safe speed lever.
+- Ephemeral mode remains slower by design, because startup safety is paid each run.
+
 ## Current Safe Speed Lever (Now Enabled)
 
 `--persistent` on one-shot commands now behaves as expected: the command leaves a reusable session running.
@@ -97,4 +118,3 @@ Collect and compare:
 4. cleanup/hygiene checks after interrupt storms
 
 Always report medians and p95 across repeated runs, not single samples.
-
