@@ -14,6 +14,10 @@ interface SpinnerTaskOptions {
 }
 
 function spinnerEnabled(): boolean {
+  if (process.env.PACKAGE_NINJA_FORCE_SPINNER === "1") {
+    return true;
+  }
+
   if (process.env.PACKAGE_NINJA_NO_SPINNER === "1") {
     return false;
   }
@@ -87,4 +91,3 @@ export async function runSpinnerTask<T>(
     throw error;
   }
 }
-
