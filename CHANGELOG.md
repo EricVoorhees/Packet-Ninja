@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1 - 2026-04-09
+
+### Packaging fix
+
+- Added `bin/` to published package files so Ares runtime binaries ship in the npm tarball.
+- Added `prepack` to build Ares + CLI before packaging/publish.
+- Verified a fresh-temp install can run `npx package-ninja install` successfully with no manual build step.
+
 ## 1.1.0 - 2026-04-09
 
 ### Ares-only runtime cutover

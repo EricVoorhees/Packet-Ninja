@@ -1,6 +1,6 @@
 {
   "name": "package-ninja",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "A polished local package registry session wrapper for npm, pnpm, and yarn.",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "files": [
     "dist",
+    "bin",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -16,6 +17,7 @@
     "build:go-ares": "node scripts/build-go-ares.mjs",
     "build:go-worker": "node scripts/build-go-worker.mjs",
     "dev": "tsx src/cli.ts",
+    "prepack": "npm run build:go-ares && npm run build",
     "test": "npm run build && node dist/selftest.js",
     "test:go-ares": "go test -C go/ares ./..."
   },
