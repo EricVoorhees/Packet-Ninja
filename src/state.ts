@@ -8,6 +8,7 @@ export interface SessionState {
   pid: number;
   port: number;
   registryUrl: string;
+  handshakeEndpoint?: string;
   rootDir: string;
   runtimeDir: string;
   storageDir: string;

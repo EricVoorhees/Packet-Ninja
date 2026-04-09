@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { rename, rm, writeFile } from "node:fs/promises";
+import { createServer, Server } from "node:net";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { runServer } from "package-ninja-registry-runtime";
@@ -9,10 +10,10 @@ const WORKER_MODE_ENV = "PACKAGE_NINJA_INTERNAL_WORKER_MODE";
 const FOREGROUND_PARENT_PID_ENV = "PACKAGE_NINJA_INTERNAL_FOREGROUND_PARENT_PID";
 
 async function main(): Promise<void> {
-  const [configPath, readyPath, host, portValue] = process.argv.slice(2);
+  const [configPath, readyPath, handshakeEndpoint, host, portValue] = process.argv.slice(2);
 
-  if (!configPath || !readyPath || !host || !portValue) {
-    throw new Error("registry-worker requires <configPath> <readyPath> <host> <port>.");
+  if (!configPath || !readyPath || !handshakeEndpoint || !host || !portValue) {
+    throw new Error("registry-worker requires <configPath> <readyPath> <handshakeEndpoint> <host> <port>.");
   }
 
   const port = Number.parseInt(portValue, 10);
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
   }
 
   const server = await runServer(configPath);
+  const handshakeServer = await startHandshakeServer(handshakeEndpoint);
   let shuttingDown = false;
 
   const shutdown = (): void => {
@@ -35,13 +37,17 @@ async function main(): Promise<void> {
     }
 
     shuttingDown = true;
-    void rm(readyPath, { force: true }).catch(() => {});
+    void Promise.all([
+      rm(readyPath, { force: true }).catch(() => {}),
+      closeHandshakeServer(handshakeServer, handshakeEndpoint)
+    ]).catch(() => {});
     server.close(() => {
       process.exit(0);
     });
   };
 
   server.once("error", (error: Error) => {
+    void closeHandshakeServer(handshakeServer, handshakeEndpoint);
     console.error(`Registry worker error: ${error.message}`);
     process.exit(1);
   });
@@ -78,6 +84,37 @@ async function main(): Promise<void> {
     await writeFile(tempReadyPath, readyPayload, "utf8");
     await rename(tempReadyPath, readyPath);
   });
+}
+
+async function startHandshakeServer(handshakeEndpoint: string): Promise<Server> {
+  if (process.platform !== "win32") {
+    await rm(handshakeEndpoint, { force: true }).catch(() => {});
+  }
+
+  const server = createServer((socket) => {
+    socket.on("data", () => {
+      socket.write("pong\n");
+      socket.end();
+    });
+  });
+
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(handshakeEndpoint, () => {
+      server.removeListener("error", reject);
+      resolve(server);
+    });
+  });
+}
+
+async function closeHandshakeServer(server: Server, handshakeEndpoint: string): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+
+  if (process.platform !== "win32") {
+    await rm(handshakeEndpoint, { force: true }).catch(() => {});
+  }
 }
 
 async function monitorForegroundParent(parentPid: number, shutdown: () => void): Promise<void> {

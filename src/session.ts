@@ -1,6 +1,6 @@
 import { access, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
-import { createServer } from "node:net";
+import { createConnection, createServer, Socket } from "node:net";
 import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
@@ -46,6 +46,9 @@ const FOREGROUND_PARENT_PID_ENV = "PACKAGE_NINJA_INTERNAL_FOREGROUND_PARENT_PID"
 const REGISTRY_SIGNAL_ENV = "VER" + "DACCIO_HANDLE_KILL_SIGNALS";
 const USE_GO_RUNNER_ENV = "PACKAGE_NINJA_USE_GO_RUNNER";
 const GO_WORKER_PATH_ENV = "PACKAGE_NINJA_GO_WORKER_PATH";
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 200;
+const DEFAULT_HANDSHAKE_RETRIES = 3;
+const HANDSHAKE_TIMEOUT_ENV = "PACKAGE_NINJA_INTERNAL_HANDSHAKE_TIMEOUT_MS";
 
 export async function startSession(options: SessionOptions): Promise<SessionState> {
   const paths = resolveProjectPaths(options.rootDir);
@@ -66,6 +69,7 @@ export async function startSession(options: SessionOptions): Promise<SessionStat
   const npmrcPath = path.join(runtimeDir, ".npmrc");
   const logPath = path.join(runtimeDir, "package-ninja-registry.log");
   const readyPath = path.join(runtimeDir, "ready.json");
+  const handshakeEndpoint = resolveHandshakeEndpoint();
   const port = options.port ?? (await choosePort(0));
   const registryUrl = `http://127.0.0.1:${port}`;
 
@@ -82,6 +86,7 @@ export async function startSession(options: SessionOptions): Promise<SessionStat
     configPath,
     logPath,
     readyPath,
+    handshakeEndpoint,
     rootDir: options.rootDir,
     port
   });
@@ -98,6 +103,7 @@ export async function startSession(options: SessionOptions): Promise<SessionStat
     pid: child.pid ?? -1,
     port,
     registryUrl,
+    handshakeEndpoint,
     rootDir: options.rootDir,
     runtimeDir,
     storageDir,
@@ -140,6 +146,13 @@ export async function readStatus(rootDir: string): Promise<SessionStatus> {
 
   const running = isProcessRunning(state.pid);
   if (!running) {
+    await clearState(paths.statePath);
+    await cleanupRuntime(state);
+    return { state: null, running: false };
+  }
+
+  if (!(await isSessionResponsive(state))) {
+    await stopProcessByPid(state.pid).catch(() => {});
     await clearState(paths.statePath);
     await cleanupRuntime(state);
     return { state: null, running: false };
@@ -257,6 +270,7 @@ async function startForegroundSession(options: SessionOptions): Promise<Foregrou
   const logPath = path.join(runtimeDir, "package-ninja-registry.log");
   const npmrcPath = path.join(runtimeDir, ".npmrc");
   const readyPath = path.join(runtimeDir, "ready.json");
+  const handshakeEndpoint = resolveHandshakeEndpoint();
   const configPath = await writeRegistryConfig({
     runtimeDir,
     storageDir,
@@ -270,6 +284,7 @@ async function startForegroundSession(options: SessionOptions): Promise<Foregrou
     logPath,
     rootDir: options.rootDir,
     readyPath,
+    handshakeEndpoint,
     port,
     detached: false
   });
@@ -291,6 +306,7 @@ async function startForegroundSession(options: SessionOptions): Promise<Foregrou
     pid: child.pid ?? -1,
     port,
     registryUrl,
+    handshakeEndpoint,
     rootDir: options.rootDir,
     runtimeDir,
     storageDir,
@@ -522,6 +538,7 @@ async function pathExists(targetPath: string): Promise<boolean> {
 interface LaunchOptions {
   configPath: string;
   readyPath: string;
+  handshakeEndpoint: string;
   logPath: string;
   rootDir: string;
   port: number;
@@ -536,6 +553,72 @@ function resolveRuntimeDir(workspaceDir: string, persistent: boolean): string {
   return path.join(os.tmpdir(), "package-ninja", randomUUID());
 }
 
+function resolveHandshakeEndpoint(): string {
+  if (process.platform === "win32") {
+    return `\\\\.\\pipe\\package-ninja-${randomUUID()}`;
+  }
+
+  return path.join(os.tmpdir(), `package-ninja-${randomUUID()}.sock`);
+}
+
+async function isSessionResponsive(state: SessionState): Promise<boolean> {
+  if (!state.handshakeEndpoint) {
+    return true;
+  }
+
+  const timeoutMs = readHandshakeTimeout();
+  for (let attempt = 0; attempt < DEFAULT_HANDSHAKE_RETRIES; attempt += 1) {
+    if (await pingHandshakeEndpoint(state.handshakeEndpoint, timeoutMs)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function pingHandshakeEndpoint(endpoint: string, timeoutMs: number): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const socket = createConnection(endpoint);
+    let settled = false;
+
+    const finish = (result: boolean): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+
+    const timeout = setTimeout(() => {
+      finish(false);
+    }, timeoutMs);
+    timeout.unref();
+
+    socket.once("connect", () => {
+      socket.write("ping\n");
+    });
+
+    socket.once("data", (chunk: Buffer | string) => {
+      const response = chunk.toString().trim().toLowerCase();
+      clearTimeout(timeout);
+      finish(response === "pong");
+    });
+
+    socket.once("error", () => {
+      clearTimeout(timeout);
+      finish(false);
+    });
+
+    socket.once("close", () => {
+      clearTimeout(timeout);
+      finish(false);
+    });
+  });
+}
+
 async function launchRegistryWorker(options: LaunchOptions): Promise<ChildProcess> {
   const workerPath = fileURLToPath(new URL("./registry-worker.js", import.meta.url));
 
@@ -545,7 +628,7 @@ async function launchRegistryWorker(options: LaunchOptions): Promise<ChildProces
   try {
     const child = spawn(
       process.execPath,
-      [workerPath, options.configPath, options.readyPath, "127.0.0.1", String(options.port)],
+      [workerPath, options.configPath, options.readyPath, options.handshakeEndpoint, "127.0.0.1", String(options.port)],
       {
         cwd: options.rootDir,
         detached: options.detached ?? true,
@@ -780,6 +863,20 @@ function readReadyTimeout(): number {
   const timeoutMs = Number.parseInt(raw, 10);
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     return DEFAULT_READY_TIMEOUT_MS;
+  }
+
+  return timeoutMs;
+}
+
+function readHandshakeTimeout(): number {
+  const raw = process.env[HANDSHAKE_TIMEOUT_ENV];
+  if (!raw) {
+    return DEFAULT_HANDSHAKE_TIMEOUT_MS;
+  }
+
+  const timeoutMs = Number.parseInt(raw, 10);
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_HANDSHAKE_TIMEOUT_MS;
   }
 
   return timeoutMs;
