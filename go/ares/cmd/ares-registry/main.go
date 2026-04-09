@@ -23,7 +23,15 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer cancel()
 
-	logger.Printf("starting: listen=%s upstream=%s dataDir=%s shadow=%t", cfg.ListenAddr, cfg.UpstreamURL, cfg.DataDir, cfg.EnableShadowMode)
+	logger.Printf(
+		"starting: listen=%s upstream=%s dataDir=%s shadow=%t strictParity=%t parityReport=%s",
+		cfg.ListenAddr,
+		cfg.UpstreamURL,
+		cfg.DataDir,
+		cfg.EnableShadowMode,
+		cfg.StrictParity,
+		cfg.ParityReportPath,
+	)
 
 	if err := engine.Run(ctx); err != nil {
 		logger.Fatalf("engine run failed: %v", err)

@@ -15,6 +15,7 @@ const (
 	defaultRequestTimeoutMs = 30_000
 	defaultMetadataTTLms    = 15_000
 	defaultShadowTimeoutMs  = 2_000
+	defaultParityEntries    = 300
 )
 
 type Config struct {
@@ -26,6 +27,9 @@ type Config struct {
 	ShadowTargetURL  string
 	ShadowTimeout    time.Duration
 	EnableShadowMode bool
+	StrictParity     bool
+	ParityReportPath string
+	ParityMaxEntries int
 }
 
 func FromEnv() Config {
@@ -41,6 +45,8 @@ func FromEnv() Config {
 
 	shadowTarget := readEnv("PACKAGE_NINJA_ARES_SHADOW_URL", "")
 	enableShadowMode := strings.TrimSpace(shadowTarget) != ""
+	parityReportPath := readEnv("PACKAGE_NINJA_ARES_PARITY_REPORT_PATH", filepath.Join(dataDir, "parity-report.json"))
+	strictParity := readBoolEnv("PACKAGE_NINJA_ARES_STRICT_PARITY", false)
 
 	return Config{
 		ListenAddr:       readEnv("PACKAGE_NINJA_ARES_LISTEN", defaultListenAddr),
@@ -51,6 +57,9 @@ func FromEnv() Config {
 		ShadowTargetURL:  strings.TrimRight(shadowTarget, "/"),
 		ShadowTimeout:    time.Duration(readIntEnv("PACKAGE_NINJA_ARES_SHADOW_TIMEOUT_MS", defaultShadowTimeoutMs)) * time.Millisecond,
 		EnableShadowMode: enableShadowMode,
+		StrictParity:     strictParity,
+		ParityReportPath: parityReportPath,
+		ParityMaxEntries: readIntEnv("PACKAGE_NINJA_ARES_PARITY_MAX_ENTRIES", defaultParityEntries),
 	}
 }
 
@@ -75,4 +84,20 @@ func readIntEnv(name string, fallback int) int {
 	}
 
 	return parsed
+}
+
+func readBoolEnv(name string, fallback bool) bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+	if raw == "" {
+		return fallback
+	}
+
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

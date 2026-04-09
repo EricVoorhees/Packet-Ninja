@@ -117,20 +117,55 @@ func (s *TarballStore) StreamAndCache(key string, src io.Reader, dst io.Writer, 
 		return TarballEntry{}, err
 	}
 	tempPath := tempFile.Name()
-	defer func() {
+	closeAndRemoveTemp := func() {
 		_ = tempFile.Close()
-	}()
-
-	hasher := sha256.New()
-	writers := []io.Writer{tempFile, hasher}
-	if dst != nil {
-		writers = append(writers, dst)
+		_ = os.Remove(tempPath)
 	}
 
-	bytesWritten, copyErr := io.CopyBuffer(io.MultiWriter(writers...), src, make([]byte, 256*1024))
-	if copyErr != nil {
+	hasher := sha256.New()
+	cacheWriter := io.MultiWriter(tempFile, hasher)
+	buffer := make([]byte, 256*1024)
+	var bytesWritten int64
+	destinationFailed := false
+
+	for {
+		readCount, readErr := src.Read(buffer)
+		if readCount > 0 {
+			chunk := buffer[:readCount]
+			written, writeErr := cacheWriter.Write(chunk)
+			bytesWritten += int64(written)
+			if writeErr != nil {
+				closeAndRemoveTemp()
+				return TarballEntry{}, writeErr
+			}
+			if written != readCount {
+				closeAndRemoveTemp()
+				return TarballEntry{}, io.ErrShortWrite
+			}
+
+			if dst != nil && !destinationFailed {
+				if _, dstErr := dst.Write(chunk); dstErr != nil {
+					// Do not fail cache population on downstream socket churn.
+					// Followers can still succeed from the completed cache artifact.
+					destinationFailed = true
+				}
+			}
+		}
+
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+
+		closeAndRemoveTemp()
+		return TarballEntry{}, readErr
+	}
+
+	if closeErr := tempFile.Close(); closeErr != nil {
 		_ = os.Remove(tempPath)
-		return TarballEntry{}, copyErr
+		return TarballEntry{}, closeErr
 	}
 
 	digest := hex.EncodeToString(hasher.Sum(nil))

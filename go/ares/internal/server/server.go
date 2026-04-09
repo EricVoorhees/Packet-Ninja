@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 
 	"package-ninja-ares/internal/collapse"
 	"package-ninja-ares/internal/config"
+	"package-ninja-ares/internal/parity"
 	"package-ninja-ares/internal/state"
 	"package-ninja-ares/internal/storage"
 )
@@ -26,6 +29,8 @@ type Engine struct {
 	metadata   *storage.MetadataCache
 	tarFlight  *collapse.Coordinator
 	metaFlight *collapse.Coordinator
+	reporter   *parity.Reporter
+	stats      *upstreamStats
 }
 
 func New(cfg config.Config, logger *log.Logger) (*Engine, error) {
@@ -54,6 +59,8 @@ func New(cfg config.Config, logger *log.Logger) (*Engine, error) {
 		metadata:   metadataCache,
 		tarFlight:  collapse.NewCoordinator(),
 		metaFlight: collapse.NewCoordinator(),
+		reporter:   parity.NewReporter(cfg.ParityReportPath, cfg.ParityMaxEntries),
+		stats:      newUpstreamStats(),
 	}
 
 	_ = engine.state.Transition(state.StateReady, "engine initialized")
@@ -106,6 +113,10 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.handleHealth(w)
 		return
 	}
+	if r.URL.Path == "/-/stats" {
+		e.handleStats(w)
+		return
+	}
 
 	if isTarballPath(r.URL.EscapedPath()) {
 		e.handleTarball(w, r)
@@ -133,41 +144,53 @@ func (e *Engine) handleHealth(w http.ResponseWriter) {
 	)
 }
 
+func (e *Engine) handleStats(w http.ResponseWriter) {
+	if e.stats == nil {
+		http.Error(w, "stats unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(e.stats.snapshot())
+}
+
 func (e *Engine) handleMetadata(w http.ResponseWriter, r *http.Request) {
+	requestStarted := time.Now()
 	key := "metadata:" + r.URL.RequestURI()
 	entry, _, hasCache := e.metadata.Lookup(key)
 
 	if hasCache && e.metadata.IsFresh(entry, e.cfg.MetadataTTL) {
-		served, err := e.metadata.ServeCached(w, r, key)
-		if err != nil {
+		if err := e.serveCachedMetadataResponse(w, r, entry, requestStarted); err != nil {
 			e.logger.Printf("metadata cache serve error: key=%s err=%v", key, err)
 			http.Error(w, "metadata cache read failed", http.StatusInternalServerError)
-			return
 		}
-		if served {
-			return
-		}
+		return
 	}
 
 	leader, wait, done := e.metaFlight.Begin(key)
 	if !leader {
+		e.stats.recordMetadataFollower(r.URL.RequestURI())
 		if err := wait(); err != nil {
 			http.Error(w, "metadata fetch failed", http.StatusBadGateway)
 			return
 		}
 
-		served, serveErr := e.metadata.ServeCached(w, r, key)
-		if serveErr != nil {
-			http.Error(w, "metadata cache read failed", http.StatusInternalServerError)
-			return
-		}
-		if served {
+		followerEntry, _, ok := e.metadata.Lookup(key)
+		if !ok {
+			http.Error(w, "metadata unavailable", http.StatusBadGateway)
 			return
 		}
 
-		http.Error(w, "metadata unavailable", http.StatusBadGateway)
+		if serveErr := e.serveCachedMetadataResponse(w, r, followerEntry, requestStarted); serveErr != nil {
+			http.Error(w, "metadata cache read failed", http.StatusInternalServerError)
+			return
+		}
 		return
 	}
+	e.stats.recordMetadataLeader(r.URL.RequestURI())
 
 	var leaderErr error
 	defer func() {
@@ -192,6 +215,7 @@ func (e *Engine) handleMetadata(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	e.stats.recordMetadataUpstream(r.URL.RequestURI())
 	resp, err := e.client.Do(upstreamReq)
 	if err != nil {
 		leaderErr = err
@@ -200,34 +224,32 @@ func (e *Engine) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	e.shadowProbe(r)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if readErr != nil {
+		leaderErr = readErr
+		http.Error(w, "metadata read failed", http.StatusBadGateway)
+		return
+	}
 
 	if resp.StatusCode == http.StatusNotModified && hasCache {
-		served, serveErr := e.metadata.ServeCached(w, r, key)
-		if serveErr != nil {
+		if serveErr := e.serveCachedMetadataResponse(w, r, entry, requestStarted); serveErr != nil {
 			leaderErr = serveErr
 			http.Error(w, "metadata cache read failed", http.StatusInternalServerError)
-			return
 		}
-		if served {
-			return
-		}
+		return
+	}
+
+	aresTTFB := time.Since(requestStarted)
+	if parityErr := e.checkMetadataParity(r, resp.StatusCode, body, aresTTFB); parityErr != nil {
+		leaderErr = parityErr
+		http.Error(w, "metadata parity strict check failed", http.StatusBadGateway)
+		return
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		copyResponseHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
-		_, copyErr := io.Copy(w, resp.Body)
-		if copyErr != nil {
-			leaderErr = copyErr
-		}
-		return
-	}
-
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	if readErr != nil {
-		leaderErr = readErr
-		http.Error(w, "metadata read failed", http.StatusBadGateway)
+		_, leaderErr = w.Write(body)
 		return
 	}
 
@@ -253,6 +275,198 @@ func (e *Engine) handleMetadata(w http.ResponseWriter, r *http.Request) {
 	_, leaderErr = w.Write(body)
 }
 
+func (e *Engine) serveCachedMetadataResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	entry storage.MetadataEntry,
+	requestStarted time.Time,
+) error {
+	lookupEntry, body, ok := e.metadata.Lookup(entry.Key)
+	if !ok {
+		return errors.New("cached metadata not found")
+	}
+
+	entry = lookupEntry
+	statusCode := http.StatusOK
+	responseBody := body
+	if entry.ETag != "" && r.Header.Get("If-None-Match") == entry.ETag {
+		statusCode = http.StatusNotModified
+		responseBody = nil
+	}
+
+	if parityErr := e.checkMetadataParity(r, statusCode, responseBody, time.Since(requestStarted)); parityErr != nil {
+		return parityErr
+	}
+
+	if entry.ContentType != "" {
+		w.Header().Set("Content-Type", entry.ContentType)
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	if entry.ETag != "" {
+		w.Header().Set("ETag", entry.ETag)
+	}
+	if entry.LastModified != "" {
+		w.Header().Set("Last-Modified", entry.LastModified)
+	}
+
+	w.WriteHeader(statusCode)
+	if statusCode == http.StatusNotModified || len(responseBody) == 0 {
+		return nil
+	}
+
+	_, err := w.Write(responseBody)
+	return err
+}
+
+type metadataProbeRequest struct {
+	method     string
+	requestURI string
+	headers    http.Header
+}
+
+func (e *Engine) checkMetadataParity(r *http.Request, aresStatus int, aresBody []byte, aresTTFB time.Duration) error {
+	if !e.cfg.EnableShadowMode || strings.TrimSpace(e.cfg.ShadowTargetURL) == "" {
+		return nil
+	}
+
+	request := metadataProbeRequest{
+		method:     r.Method,
+		requestURI: r.URL.RequestURI(),
+		headers:    r.Header.Clone(),
+	}
+
+	if e.cfg.StrictParity {
+		entry := e.runMetadataParityProbe(request, aresStatus, aresBody, aresTTFB)
+		e.appendParityEntry(entry)
+		if entry.StrictViolation {
+			return fmt.Errorf("shadow parity mismatch for %s", request.requestURI)
+		}
+		return nil
+	}
+
+	bodyCopy := append([]byte(nil), aresBody...)
+	go func() {
+		entry := e.runMetadataParityProbe(request, aresStatus, bodyCopy, aresTTFB)
+		e.appendParityEntry(entry)
+	}()
+	return nil
+}
+
+func (e *Engine) runMetadataParityProbe(
+	request metadataProbeRequest,
+	aresStatus int,
+	aresBody []byte,
+	aresTTFB time.Duration,
+) parity.ReportEntry {
+	reportEntry := parity.ReportEntry{
+		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
+		Method:        request.method,
+		Path:          request.requestURI,
+		AresStatus:    aresStatus,
+		AresTTFBMs:    durationToMilliseconds(aresTTFB),
+		AresBodyBytes: len(aresBody),
+		Result:        parity.ResultMatch,
+	}
+
+	timeout := e.cfg.ShadowTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	target := e.cfg.ShadowTargetURL + request.requestURI
+	shadowReq, err := http.NewRequestWithContext(ctx, request.method, target, nil)
+	if err != nil {
+		reportEntry.Result = parity.ResultError
+		reportEntry.StrictViolation = true
+		reportEntry.Error = fmt.Sprintf("shadow request build failed: %v", err)
+		return reportEntry
+	}
+
+	shadowReq.Header = request.headers.Clone()
+	shadowReq.Header.Set("Accept-Encoding", "identity")
+	shadowReq.Host = ""
+
+	shadowStarted := time.Now()
+	shadowResp, err := e.client.Do(shadowReq)
+	if err != nil {
+		reportEntry.Result = parity.ResultError
+		reportEntry.StrictViolation = true
+		reportEntry.Error = fmt.Sprintf("shadow request failed: %v", err)
+		return reportEntry
+	}
+	defer shadowResp.Body.Close()
+
+	reportEntry.ShadowTTFBMs = durationToMilliseconds(time.Since(shadowStarted))
+	reportEntry.ShadowStatus = shadowResp.StatusCode
+
+	shadowBody, readErr := io.ReadAll(io.LimitReader(shadowResp.Body, 64<<20))
+	if readErr != nil {
+		reportEntry.Result = parity.ResultError
+		reportEntry.StrictViolation = true
+		reportEntry.Error = fmt.Sprintf("shadow body read failed: %v", readErr)
+		return reportEntry
+	}
+	reportEntry.ShadowBodyBytes = len(shadowBody)
+
+	if aresStatus != shadowResp.StatusCode {
+		reportEntry.Result = parity.ResultMismatch
+		reportEntry.StrictViolation = true
+		reportEntry.Error = fmt.Sprintf("status mismatch: ares=%d shadow=%d", aresStatus, shadowResp.StatusCode)
+		return reportEntry
+	}
+
+	if aresStatus == http.StatusNotModified {
+		return reportEntry
+	}
+
+	if aresStatus != http.StatusOK {
+		if bytes.Equal(bytes.TrimSpace(aresBody), bytes.TrimSpace(shadowBody)) {
+			return reportEntry
+		}
+
+		reportEntry.Result = parity.ResultMismatch
+		reportEntry.StrictViolation = true
+		reportEntry.Error = "non-200 body mismatch"
+		return reportEntry
+	}
+
+	diff, diffErr := parity.CompareMetadataJSON(aresBody, shadowBody, 40)
+	if diffErr != nil {
+		reportEntry.Result = parity.ResultError
+		reportEntry.StrictViolation = true
+		reportEntry.Error = diffErr.Error()
+		return reportEntry
+	}
+
+	if diff.Equal {
+		return reportEntry
+	}
+
+	reportEntry.Result = parity.ResultMismatch
+	reportEntry.StrictViolation = true
+	reportEntry.Diff = &diff
+	reportEntry.Error = "metadata body mismatch"
+	return reportEntry
+}
+
+func (e *Engine) appendParityEntry(entry parity.ReportEntry) {
+	if e.reporter == nil {
+		return
+	}
+
+	if err := e.reporter.Append(entry); err != nil {
+		e.logger.Printf("parity report append error: path=%s err=%v", entry.Path, err)
+	}
+}
+
+func durationToMilliseconds(value time.Duration) float64 {
+	return float64(value.Microseconds()) / 1000.0
+}
+
 func (e *Engine) handleTarball(w http.ResponseWriter, r *http.Request) {
 	key := "tarball:" + r.URL.RequestURI()
 
@@ -267,6 +481,7 @@ func (e *Engine) handleTarball(w http.ResponseWriter, r *http.Request) {
 
 	leader, wait, done := e.tarFlight.Begin(key)
 	if !leader {
+		e.stats.recordTarballFollower(r.URL.RequestURI())
 		if waitErr := wait(); waitErr != nil {
 			http.Error(w, "tarball fetch failed", http.StatusBadGateway)
 			return
@@ -284,6 +499,7 @@ func (e *Engine) handleTarball(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tarball unavailable", http.StatusBadGateway)
 		return
 	}
+	e.stats.recordTarballLeader(r.URL.RequestURI())
 
 	var leaderErr error
 	defer func() {
@@ -297,6 +513,7 @@ func (e *Engine) handleTarball(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	e.stats.recordTarballUpstream(r.URL.RequestURI())
 	resp, err := e.client.Do(upstreamReq)
 	if err != nil {
 		leaderErr = err
@@ -333,6 +550,7 @@ func (e *Engine) proxyPassthrough(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	e.stats.recordPassthroughUpstream(r.URL.RequestURI())
 	resp, err := e.client.Do(upstreamReq)
 	if err != nil {
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
