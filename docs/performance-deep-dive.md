@@ -7,14 +7,16 @@ Platform: Windows (Node 20+)
 
 Break down where time is spent in `package-ninja install/dev/test/run`, identify what is structural vs. optimizable, and define safe next-step speed work without compromising reliability.
 
-## Measured Baseline
+## Measured Baseline (Current)
 
-Small/medium install comparison (`npm install --ignore-scripts --no-audit --no-fund` vs `package-ninja install`):
+Small/medium install comparison (`n=3`, median) using:
 
-| Scenario | Direct npm | Package Ninja (ephemeral) |
-| --- | --- | --- |
-| small (1 dep) | ~1.8s | ~4.5s |
-| medium (8 deps) | ~2.9s | ~7.3s |
+`npm install <deps> --ignore-scripts --no-audit --no-fund`
+
+| Scenario | Direct npm | Package Ninja (ephemeral, Node worker) | Package Ninja (ephemeral, Go worker) |
+| --- | --- | --- | --- |
+| small (1 dep) | ~1.4s | ~4.8s | ~4.0s |
+| medium (8 deps) | ~1.7s | ~6.3s | ~4.9s |
 
 Interpretation:
 
@@ -43,26 +45,20 @@ Result:
 
 ## Recent Optimization Impact
 
-Measured before and after the safe Windows command-worker change:
+Warm persistent follow-up (same project, no-op install, `n=3`, median):
 
-| Scenario | Before | After | Improvement |
-| --- | --- | --- | --- |
-| small install (ephemeral) | ~6.1s | ~4.5s | ~26% faster |
-| medium install (ephemeral) | ~9.6s | ~7.3s | ~24% faster |
-
-Measured warm-session reuse (`install` command, two-install sequence):
-
-| Pattern | Total |
+| Path | Median |
 | --- | --- |
-| two ephemeral installs (small) | ~9.0s |
-| `--persistent` first install + reused install + stop | ~6.4s |
+| persistent follow-up (Node worker) | ~2.8s |
+| persistent follow-up (Go worker) | ~1.6s |
 
 Interpretation:
 
-- Reuse is currently the highest-impact safe speed lever.
-- Ephemeral mode remains slower by design, because startup safety is paid each run.
+- Reuse remains the highest-impact safe speed lever.
+- Go worker meaningfully reduces command orchestration overhead.
+- Cold startup is still a real fixed cost until registry-start architecture changes.
 
-## Current Safe Speed Lever (Now Enabled)
+## Current Safe Speed Lever
 
 `--persistent` on one-shot commands now behaves as expected: the command leaves a reusable session running.
 

@@ -123,17 +123,26 @@ package-ninja publish -- --tag next
 
 Package Ninja has a fixed per-session overhead on cold ephemeral runs. For repeated commands, session reuse is the primary speed lever.
 
-### Baseline Snapshot (Windows, April 8, 2026)
+### Current Snapshot (Windows, April 8, 2026)
 
-| Scenario | Direct npm | Package Ninja (ephemeral) | Delta |
+Fresh local median samples (`n=3`) with identical install args:
+
+`npm install <deps> --ignore-scripts --no-audit --no-fund`
+
+| Scenario | Direct npm | Package Ninja (ephemeral, Node worker) | Package Ninja (ephemeral, Go worker) |
 | --- | --- | --- | --- |
-| small install (1 dep) | ~1.8s | ~4.5s | +~2.7s |
-| medium install (8 deps) | ~2.9s | ~7.3s | +~4.4s |
+| small install (1 dep) | ~1.4s | ~4.8s | ~4.0s |
+| medium install (8 deps) | ~1.7s | ~6.3s | ~4.9s |
+
+Warm persistent follow-up (same project, no-op install, median `n=3`):
+
+- Node worker path: ~2.8s
+- Go worker path: ~1.6s
 
 ### Where Time Goes (cold ephemeral)
 
-- registry startup: ~1.6s to ~1.9s
-- command orchestration/handoff: ~0.7s to ~1.0s
+- registry startup: still the largest fixed cost
+- command orchestration/handoff: materially reduced by Go worker path
 - package-manager work: dependency/network/cache dependent
 
 ### Practical Guidance
