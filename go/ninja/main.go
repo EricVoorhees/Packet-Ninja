@@ -14,7 +14,9 @@ import (
 )
 
 const (
-	handshakeTimeout = 5 * time.Millisecond
+	handshakeAttemptTimeout = 5 * time.Millisecond
+	handshakeBudget         = 30 * time.Millisecond
+	handshakeAttempts       = 3
 )
 
 type sessionState struct {
@@ -37,7 +39,7 @@ func run() error {
 		return err
 	}
 
-	if hasState && pingHandshake(state.HandshakeEndpoint) {
+	if hasState && pingHandshakeWithRetry(state.HandshakeEndpoint) {
 		workerPath, err := resolveGoWorkerPath()
 		if err != nil {
 			return err
@@ -112,18 +114,56 @@ func readState(projectRoot string) (sessionState, bool, error) {
 	return state, true, nil
 }
 
-func pingHandshake(endpoint string) bool {
+func pingHandshakeWithRetry(endpoint string) bool {
+	deadline := time.Now().Add(handshakeBudget)
+
+	for attempt := 0; attempt < handshakeAttempts; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+
+		timeout := handshakeAttemptTimeout
+		if remaining < timeout {
+			timeout = remaining
+		}
+
+		if pingHandshakeOnce(endpoint, timeout) {
+			return true
+		}
+
+		if attempt == handshakeAttempts-1 {
+			break
+		}
+
+		jitter := retryJitter(attempt)
+		if jitter <= 0 {
+			continue
+		}
+
+		remainingAfterAttempt := time.Until(deadline)
+		if remainingAfterAttempt <= jitter {
+			return false
+		}
+
+		time.Sleep(jitter)
+	}
+
+	return false
+}
+
+func pingHandshakeOnce(endpoint string, timeout time.Duration) bool {
 	if strings.TrimSpace(endpoint) == "" {
 		return false
 	}
 
-	conn, err := dialHandshake(endpoint, handshakeTimeout)
+	conn, err := dialHandshake(endpoint, timeout)
 	if err != nil {
 		return false
 	}
 	defer conn.Close()
 
-	_ = conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if _, err := conn.Write([]byte("ping\n")); err != nil {
 		return false
 	}
@@ -134,6 +174,12 @@ func pingHandshake(endpoint string) bool {
 	}
 
 	return strings.EqualFold(strings.TrimSpace(response), "pong")
+}
+
+func retryJitter(attempt int) time.Duration {
+	base := time.Duration(2+attempt*3) * time.Millisecond
+	extra := time.Duration(time.Now().UnixNano()%2) * time.Millisecond
+	return base + extra
 }
 
 func resolveGoWorkerPath() (string, error) {

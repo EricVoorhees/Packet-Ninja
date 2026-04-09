@@ -74,6 +74,7 @@ export async function startSession(options: SessionOptions): Promise<SessionStat
   const registryUrl = `http://127.0.0.1:${port}`;
 
   await mkdir(runtimeDir, { recursive: true });
+  await rm(readyPath, { force: true }).catch(() => {});
   const configPath = await writeRegistryConfig({
     runtimeDir,
     storageDir,
@@ -92,7 +93,7 @@ export async function startSession(options: SessionOptions): Promise<SessionStat
   });
 
   try {
-    await waitForReady(child, readyPath, logPath);
+    await waitForReady(child, readyPath, logPath, child.pid ?? -1, port);
   } catch (error) {
     await stopChildProcess(child);
     await cleanupFailedStartup(runtimeDir, options.persistent);
@@ -132,6 +133,7 @@ export async function stopSession(rootDir: string): Promise<SessionState | null>
   }
 
   await clearState(paths.statePath);
+  await clearReadyMarker(state);
   await cleanupRuntime(state);
   return state;
 }
@@ -147,6 +149,7 @@ export async function readStatus(rootDir: string): Promise<SessionStatus> {
   const running = isProcessRunning(state.pid);
   if (!running) {
     await clearState(paths.statePath);
+    await clearReadyMarker(state);
     await cleanupRuntime(state);
     return { state: null, running: false };
   }
@@ -154,6 +157,7 @@ export async function readStatus(rootDir: string): Promise<SessionStatus> {
   if (!(await isSessionResponsive(state))) {
     await stopProcessByPid(state.pid).catch(() => {});
     await clearState(paths.statePath);
+    await clearReadyMarker(state);
     await cleanupRuntime(state);
     return { state: null, running: false };
   }
@@ -279,6 +283,7 @@ async function startForegroundSession(options: SessionOptions): Promise<Foregrou
   });
 
   await writeNpmRc(npmrcPath, registryUrl);
+  await rm(readyPath, { force: true }).catch(() => {});
   const child = await launchRegistryWorker({
     configPath,
     logPath,
@@ -290,7 +295,7 @@ async function startForegroundSession(options: SessionOptions): Promise<Foregrou
   });
 
   try {
-    await waitForReady(child, readyPath, logPath);
+    await waitForReady(child, readyPath, logPath, child.pid ?? -1, port);
   } catch (error) {
     await stopChildProcess(child);
     await cleanupFailedStartup(runtimeDir, options.persistent);
@@ -660,7 +665,18 @@ async function writeNpmRc(npmrcPath: string, registryUrl: string): Promise<void>
   await writeFile(npmrcPath, content, "utf8");
 }
 
-async function waitForReady(child: ChildProcess, readyPath: string, logPath: string): Promise<void> {
+interface ReadyPayload {
+  port?: number;
+  pid?: number;
+}
+
+async function waitForReady(
+  child: ChildProcess,
+  readyPath: string,
+  logPath: string,
+  expectedPid: number,
+  expectedPort: number
+): Promise<void> {
   const startedAt = Date.now();
   const timeoutMs = readReadyTimeout();
 
@@ -673,6 +689,16 @@ async function waitForReady(child: ChildProcess, readyPath: string, logPath: str
       const raw = await readFile(readyPath, "utf8");
       const ready = parseReadyPayload(raw);
       if (ready === null) {
+        await delay(200);
+        continue;
+      }
+
+      if (ready.port !== expectedPort) {
+        await delay(200);
+        continue;
+      }
+
+      if (expectedPid > 0 && ready.pid !== expectedPid) {
         await delay(200);
         continue;
       }
@@ -692,14 +718,14 @@ async function waitForReady(child: ChildProcess, readyPath: string, logPath: str
   throw new Error(await renderStartupFailure(logPath, "Registry readiness timed out."));
 }
 
-function parseReadyPayload(raw: string): { port?: number } | null {
+function parseReadyPayload(raw: string): ReadyPayload | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
     return null;
   }
 
   try {
-    return JSON.parse(trimmed) as { port?: number };
+    return JSON.parse(trimmed) as ReadyPayload;
   } catch (error) {
     if (error instanceof SyntaxError) {
       // The worker writes ready.json asynchronously; tolerate transient partial reads.
@@ -843,6 +869,11 @@ async function cleanupFailedStartup(runtimeDir: string, persistent: boolean): Pr
     offline: false,
     createdAt: ""
   });
+}
+
+async function clearReadyMarker(state: SessionState): Promise<void> {
+  const readyPath = path.join(state.runtimeDir, "ready.json");
+  await rm(readyPath, { force: true }).catch(() => {});
 }
 
 async function maybeWriteInternalPid(envName: string, pid: number): Promise<void> {

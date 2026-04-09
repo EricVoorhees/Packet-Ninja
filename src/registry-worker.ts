@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
 import { rename, rm, writeFile } from "node:fs/promises";
-import { createServer, Server } from "node:net";
+import { createConnection, createServer, Server } from "node:net";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { runServer } from "package-ninja-registry-runtime";
 
 const WORKER_MODE_ENV = "PACKAGE_NINJA_INTERNAL_WORKER_MODE";
 const FOREGROUND_PARENT_PID_ENV = "PACKAGE_NINJA_INTERNAL_FOREGROUND_PARENT_PID";
+const HANDSHAKE_READY_TIMEOUT_MS = 50;
+const HANDSHAKE_READY_ATTEMPTS = 12;
 
 async function main(): Promise<void> {
   const [configPath, readyPath, handshakeEndpoint, host, portValue] = process.argv.slice(2);
@@ -30,6 +32,7 @@ async function main(): Promise<void> {
   const server = await runServer(configPath);
   const handshakeServer = await startHandshakeServer(handshakeEndpoint);
   let shuttingDown = false;
+  let shutdownPromise: Promise<void> | null = null;
 
   const shutdown = (): void => {
     if (shuttingDown) {
@@ -37,19 +40,33 @@ async function main(): Promise<void> {
     }
 
     shuttingDown = true;
-    void Promise.all([
-      rm(readyPath, { force: true }).catch(() => {}),
-      closeHandshakeServer(handshakeServer, handshakeEndpoint)
-    ]).catch(() => {});
-    server.close(() => {
+    shutdownPromise = (async () => {
+      await Promise.all([
+        rm(readyPath, { force: true }).catch(() => {}),
+        closeHandshakeServer(handshakeServer, handshakeEndpoint)
+      ]).catch(() => {});
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    })();
+
+    void shutdownPromise.finally(() => {
       process.exit(0);
     });
   };
 
   server.once("error", (error: Error) => {
-    void closeHandshakeServer(handshakeServer, handshakeEndpoint);
-    console.error(`Registry worker error: ${error.message}`);
-    process.exit(1);
+    const finalizeError = async (): Promise<void> => {
+      if (shutdownPromise) {
+        await shutdownPromise.catch(() => {});
+      } else {
+        await closeHandshakeServer(handshakeServer, handshakeEndpoint).catch(() => {});
+      }
+      console.error(`Registry worker error: ${error.message}`);
+      process.exit(1);
+    };
+
+    void finalizeError();
   });
 
   process.on("SIGINT", shutdown);
@@ -64,6 +81,8 @@ async function main(): Promise<void> {
     if (workerMode === "stall-ready") {
       return;
     }
+
+    await assertHandshakeReady(handshakeEndpoint);
 
     const address = server.address();
     const payload =
@@ -83,6 +102,61 @@ async function main(): Promise<void> {
     const tempReadyPath = `${readyPath}.tmp-${process.pid}-${Date.now()}`;
     await writeFile(tempReadyPath, readyPayload, "utf8");
     await rename(tempReadyPath, readyPath);
+  });
+}
+
+async function assertHandshakeReady(handshakeEndpoint: string): Promise<void> {
+  for (let attempt = 0; attempt < HANDSHAKE_READY_ATTEMPTS; attempt += 1) {
+    if (await pingHandshakeEndpoint(handshakeEndpoint, HANDSHAKE_READY_TIMEOUT_MS)) {
+      return;
+    }
+
+    const jitterMs = 4 + Math.floor(Math.random() * 7);
+    await delay(jitterMs);
+  }
+
+  throw new Error(`Handshake endpoint did not become ready: ${handshakeEndpoint}`);
+}
+
+async function pingHandshakeEndpoint(handshakeEndpoint: string, timeoutMs: number): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const socket = createConnection(handshakeEndpoint);
+    let settled = false;
+
+    const finish = (result: boolean): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+
+    const timeout = setTimeout(() => {
+      finish(false);
+    }, timeoutMs);
+    timeout.unref();
+
+    socket.once("connect", () => {
+      socket.write("ping\n");
+    });
+
+    socket.once("data", (chunk: Buffer | string) => {
+      clearTimeout(timeout);
+      finish(chunk.toString().trim().toLowerCase() === "pong");
+    });
+
+    socket.once("error", () => {
+      clearTimeout(timeout);
+      finish(false);
+    });
+
+    socket.once("close", () => {
+      clearTimeout(timeout);
+      finish(false);
+    });
   });
 }
 

@@ -394,6 +394,7 @@ async function runRuntimeSmokeTests(): Promise<void> {
     });
 
     await proveFailureSafety(npmBase, npmFail);
+    await proveStatusHandshakeStability(npmBase);
     await proveOwnedInterruptionCleanup(npmInterrupt);
     await proveReusedInterruptionCleanup(npmInterrupt);
     await proveManagerCompatibility(smokeRoot, npmBase, pnpmBase, yarnBase, pnpmFail, yarnFail);
@@ -431,6 +432,22 @@ async function proveFailureSafety(npmBase: string, npmFail: string): Promise<voi
   const failedRun = runCli(["run", "--cwd", npmFail, "--", "node", "fail.js"]);
   assert.equal(failedRun.exitCode, 7);
   await assertSessionCleared(npmFail);
+}
+
+async function proveStatusHandshakeStability(projectDir: string): Promise<void> {
+  console.log("Self-test: status handshake stability");
+  const startResult = runCli(["start", "--cwd", projectDir]);
+  assert.equal(startResult.exitCode, 0);
+  await waitForSessionRunning(projectDir);
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const status = runCli(["status", "--cwd", projectDir]);
+    assert.match(status.output, /Package Ninja active/);
+  }
+
+  const stopResult = runCli(["stop", "--cwd", projectDir]);
+  assert.equal(stopResult.exitCode, 0);
+  await assertSessionCleared(projectDir);
 }
 
 async function proveOwnedInterruptionCleanup(npmInterrupt: string): Promise<void> {
