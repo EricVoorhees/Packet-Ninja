@@ -4,7 +4,7 @@ Date: April 9, 2026
 
 ## Mission
 
-Replace the Verdaccio-dependent runtime with a Go-native registry core without sacrificing reliability guarantees already proven in Phase 2.
+Run a Go-native registry core as the default runtime without sacrificing reliability guarantees already proven in Phase 2.
 
 This is an **engine replacement project**, not a cosmetic rewrite.
 
@@ -29,8 +29,7 @@ This is an **engine replacement project**, not a cosmetic rewrite.
 - one upstream fetch per key during collapse windows
 
 5. Transition safety:
-- hybrid mode with existing runtime still available
-- shadow/compare hooks for parity validation before cutover
+- shadow/compare hooks for parity validation during rollout
 
 ## State Machine
 
@@ -102,9 +101,9 @@ Allowed transitions:
 ## Rollout Plan
 
 1. **Stage A (Now)**: Ares alpha module in-repo (`go/ares`) with tests.
-2. **Stage B**: Hybrid selectable runtime in CLI (`--use-ares`) with Verdaccio default retained.
-3. **Stage C**: Shadow-mode parity soak against Verdaccio behavior.
-4. **Stage D**: Controlled default migration after parity + reliability gates pass.
+2. **Stage B**: Ares runtime integrated with CLI/session lifecycle.
+3. **Stage C**: Shadow-mode parity soak against target registry behavior.
+4. **Stage D**: Ares-only cutover with reliability proof matrix locked.
 
 ## Tracking Checklist
 
@@ -114,6 +113,7 @@ Allowed transitions:
 - [x] Initial request collapse coordinator in code
 - [x] CAS and metadata persistence scaffolding in code
 - [ ] Full registry route parity validation suite
-- [x] Hybrid runtime toggle integration in CLI path (`--use-ares`)
-- [ ] Shadow parity report tooling
-- [ ] Cutover readiness review
+- [x] Ares-only runtime integration in CLI/session path
+- [x] Shadow parity report tooling
+- [x] Internal upstream/collapse counters (`/-/stats`) for cutover validation
+- [x] Cutover readiness review

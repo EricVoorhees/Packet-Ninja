@@ -21,8 +21,8 @@ From measured runs in this repo:
 
 Root cause:
 
-- `package-ninja` currently starts a Verdaccio runtime for fresh ephemeral runs.
-- Verdaccio startup and plugin initialization dominate cold-start latency.
+- `package-ninja` historically started a Node-based runtime for fresh ephemeral runs.
+- runtime startup and plugin initialization dominated cold-start latency.
 - This cost repeats when commands do not reuse a warm session.
 
 ## Cross-Check of Proposed Approaches
@@ -38,7 +38,7 @@ Pros:
 Cons against current Package Ninja contract:
 
 - Re-implementing npm-registry behavior is non-trivial (packuments, dist-tags, tarball routes, proxy behavior, cache semantics).
-- Verdaccio parity for edge cases takes significant engineering and compatibility testing.
+- Legacy runtime parity for edge cases takes significant engineering and compatibility testing.
 - Requires a separate long-term runtime surface to maintain.
 
 Verdict:
@@ -68,7 +68,7 @@ Verdict:
 
 Pros:
 
-- Fast startup compared with Node+Verdaccio.
+- Fast startup compared with the legacy Node runtime.
 - Stays in JS/TS ecosystem.
 - Easier hiring/maintenance path than full Go rewrite for current team shape.
 
@@ -76,7 +76,7 @@ Cons:
 
 - Still requires implementing npm-registry-compatible API surface.
 - Bun runtime and node-tooling edge behavior must be validated against npm/pnpm/yarn at scale.
-- Not a drop-in replacement for Verdaccio behavior.
+- Not a drop-in replacement for legacy runtime behavior.
 
 Verdict:
 
@@ -129,4 +129,3 @@ If priority is long-term cold-start optimization:
 
 - start a Runtime v2 track (Bun or Go)
 - keep current runtime as stable production baseline until parity is proven
-

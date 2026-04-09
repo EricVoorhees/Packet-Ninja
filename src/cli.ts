@@ -15,8 +15,8 @@ interface ParsedCommand {
   rootDir: string;
   persistent: boolean;
   offline: boolean;
-  useAres: boolean;
   aresShadowUrl?: string;
+  aresStrictParity: boolean;
   packageManager?: PackageManager;
   scriptName?: string;
   installMode: InstallMode;
@@ -74,8 +74,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
-          useAres: parsed.useAres,
           aresShadowUrl: parsed.aresShadowUrl,
+          aresStrictParity: parsed.aresStrictParity,
           packageManager: parsed.packageManager,
           installMode: parsed.installMode,
           passthroughArgs: parsed.childArgs,
@@ -96,8 +96,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
-          useAres: parsed.useAres,
           aresShadowUrl: parsed.aresShadowUrl,
+          aresStrictParity: parsed.aresStrictParity,
           packageManager: parsed.packageManager,
           scriptName: parsed.scriptName,
           installMode: parsed.installMode,
@@ -119,8 +119,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
-          useAres: parsed.useAres,
           aresShadowUrl: parsed.aresShadowUrl,
+          aresStrictParity: parsed.aresStrictParity,
           packageManager: parsed.packageManager,
           scriptName: parsed.scriptName,
           installMode: parsed.installMode,
@@ -142,8 +142,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
-          useAres: parsed.useAres,
           aresShadowUrl: parsed.aresShadowUrl,
+          aresStrictParity: parsed.aresStrictParity,
           packageManager: parsed.packageManager,
           installMode: parsed.installMode,
           passthroughArgs: parsed.childArgs,
@@ -208,8 +208,8 @@ export function parseCommand(argv: string[]): ParsedCommand {
   let rootDir = process.cwd();
   let persistent = false;
   let offline = false;
-  let useAres = process.env.PACKAGE_NINJA_USE_ARES === "1";
   let aresShadowUrl = process.env.PACKAGE_NINJA_ARES_SHADOW_URL;
+  let aresStrictParity = parseBooleanFlag(process.env.PACKAGE_NINJA_ARES_STRICT_PARITY);
   let packageManager: PackageManager | undefined;
   let scriptName: string | undefined;
   let installMode: InstallMode = "auto";
@@ -255,11 +255,6 @@ export function parseCommand(argv: string[]): ParsedCommand {
       continue;
     }
 
-    if (option === "--use-ares") {
-      useAres = true;
-      continue;
-    }
-
     if (option === "--ares-shadow-url") {
       const value = optionArgs[index + 1];
       if (!value) {
@@ -268,6 +263,11 @@ export function parseCommand(argv: string[]): ParsedCommand {
 
       aresShadowUrl = value;
       index += 1;
+      continue;
+    }
+
+    if (option === "--ares-strict-parity") {
+      aresStrictParity = true;
       continue;
     }
 
@@ -321,8 +321,8 @@ export function parseCommand(argv: string[]): ParsedCommand {
     rootDir,
     persistent,
     offline,
-    useAres,
     aresShadowUrl,
+    aresStrictParity,
     packageManager,
     scriptName,
     installMode,
@@ -351,12 +351,12 @@ Usage
   package-ninja <command> [options] [-- <args>]
 
 Commands
-  package-ninja start [--cwd <path>] [--use-ares] [--ares-shadow-url <url>]
-  package-ninja run [--cwd <path>] [--use-ares] [--ares-shadow-url <url>] -- <command>
-  package-ninja install [--cwd <path>] [--pm npm|pnpm|yarn] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
-  package-ninja dev [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [--install|--no-install] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
-  package-ninja test [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
-  package-ninja publish [--cwd <path>] [--pm npm|pnpm|yarn] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
+  package-ninja start [--cwd <path>] [--ares-shadow-url <url>] [--ares-strict-parity]
+  package-ninja run [--cwd <path>] [--ares-shadow-url <url>] [--ares-strict-parity] -- <command>
+  package-ninja install [--cwd <path>] [--pm npm|pnpm|yarn] [--ares-shadow-url <url>] [--ares-strict-parity] [-- <args>]
+  package-ninja dev [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [--install|--no-install] [--ares-shadow-url <url>] [--ares-strict-parity] [-- <args>]
+  package-ninja test [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [--ares-shadow-url <url>] [--ares-strict-parity] [-- <args>]
+  package-ninja publish [--cwd <path>] [--pm npm|pnpm|yarn] [--ares-shadow-url <url>] [--ares-strict-parity] [-- <args>]
   package-ninja status [--cwd <path>]
   package-ninja stop [--cwd <path>]
   package-ninja help
@@ -367,11 +367,12 @@ Flags
   --script <name>              Override script name for dev/test
   --install                    Force install before dev
   --no-install                 Skip install before dev
-  --use-ares                   Use the native Ares runtime instead of Verdaccio
   --ares-shadow-url <url>      Optional shadow target URL for Ares parity probes
+  --ares-strict-parity         Fail the command when Ares shadow parity check fails
   --port <number>              Preferred local registry port
   --persistent                 Keep a reusable local session after command completion
   --offline                    Disable npmjs uplink
+  Ares runtime is always active.
 
 Examples
   package-ninja start
@@ -383,8 +384,8 @@ Examples
   package-ninja dev --script dev:frontend --cwd apps\\web
   package-ninja test -- --watch
   package-ninja publish -- --tag next
-  package-ninja install --use-ares
-  package-ninja install --use-ares --ares-shadow-url http://127.0.0.1:4873
+  package-ninja install --ares-shadow-url http://127.0.0.1:4873
+  package-ninja install --ares-shadow-url http://127.0.0.1:4873 --ares-strict-parity
   package-ninja run -- pnpm test
   package-ninja stop`);
 }
@@ -412,14 +413,6 @@ function normalizeErrorMessage(message: string): string {
     return "Publish blocked: external publishConfig.registry detected.";
   }
 
-  if (message.includes("Registry worker exited before signaling readiness.")) {
-    return "Failed to start Package Ninja session.";
-  }
-
-  if (message.includes("Registry readiness timed out.")) {
-    return "Failed to start Package Ninja session.";
-  }
-
   if (message.includes("Ares readiness timed out.")) {
     return "Failed to start Package Ninja session.";
   }
@@ -437,4 +430,9 @@ function normalizeErrorMessage(message: string): string {
 
 function isDirectExecution(): boolean {
   return process.argv[1] !== undefined && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+}
+
+function parseBooleanFlag(raw: string | undefined): boolean {
+  const value = raw?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
 }

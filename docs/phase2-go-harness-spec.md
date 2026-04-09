@@ -19,9 +19,8 @@ Current flow:
 
 - `src/cli.ts` parses command and routes to workflow/session logic.
 - `src/workflow.ts` acquires/reuses session and prints state phases.
-- `src/session.ts` starts/stops registry worker, writes state, runs command worker.
+- `src/session.ts` starts/stops the native runtime worker, writes state, runs command worker.
 - `src/command-worker.ts` owns subprocess signal handling + cleanup.
-- `src/registry-worker.ts` boots runtime server, writes atomic `ready.json`.
 - `src/state.ts` owns atomic `state.json` writes and tolerant reads.
 - `src/selftest.ts` enforces the reliability contract.
 
@@ -32,14 +31,14 @@ Phase 2 must be a drop-in replacement for command orchestration behavior, not a 
 ### In Scope
 
 1. Replace Node command worker execution path with Go harness binary.
-2. Keep existing Node registry runtime and session model intact.
+2. Keep session model and reliability contract intact.
 3. Preserve all selftest behavior and exit semantics.
 4. Add warm-path orchestration optimization with strict parity checks.
 
 ### Out of Scope
 
 - Registry protocol rewrite (packument/tarball/publish server logic).
-- Verdaccio/runtime replacement.
+- Runtime engine replacement.
 - Contract changes to publish safety.
 - Selftest coverage reduction.
 

@@ -8,7 +8,6 @@ import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseCommand } from "./cli.js";
-import { buildRegistryConfig } from "./config.js";
 import {
   buildInstallCommand,
   buildPublishCommand,
@@ -49,49 +48,15 @@ function assertCliExitCode(result: CliResult, expectedExitCode: number, label: s
 }
 
 const CLI_PATH = fileURLToPath(new URL("./cli.js", import.meta.url));
-const WORKER_MODE_ENV = "PACKAGE_NINJA_INTERNAL_WORKER_MODE";
-const READY_TIMEOUT_ENV = "PACKAGE_NINJA_INTERNAL_READY_TIMEOUT_MS";
 const OWNED_SESSION_PID_ENV = "PACKAGE_NINJA_INTERNAL_OWNED_SESSION_PID_PATH";
 const COMMAND_WORKER_PID_ENV = "PACKAGE_NINJA_INTERNAL_COMMAND_WORKER_PID_PATH";
 const SELFTEST_READY_ENV = "PACKAGE_NINJA_SELFTEST_READY_PATH";
 const SELFTEST_APP_PID_ENV = "PACKAGE_NINJA_SELFTEST_APP_PID_PATH";
 
 async function main(): Promise<void> {
-  await runConfigContractTests();
   await runProjectContractTests();
   await runRuntimeSmokeTests();
   console.log("Self-test passed.");
-}
-
-async function runConfigContractTests(): Promise<void> {
-  const online = buildRegistryConfig({
-    runtimeDir: "/tmp/package-ninja",
-    storageDir: "/tmp/package-ninja/storage",
-    port: 4873,
-    offline: false
-  });
-
-  assert.deepEqual(online.uplinks, {
-    npmjs: {
-      url: "https://registry.npmjs.org/"
-    }
-  });
-  assert.equal((online.middlewares as { audit: { enabled: boolean } }).audit.enabled, true);
-
-  const offline = buildRegistryConfig({
-    runtimeDir: "/tmp/package-ninja",
-    storageDir: "/tmp/package-ninja/storage",
-    port: 4873,
-    offline: true
-  });
-
-  assert.deepEqual(offline.uplinks, {});
-  assert.equal((offline.middlewares as { audit: { enabled: boolean } }).audit.enabled, false);
-  assert.deepEqual((offline.packages as Record<string, Record<string, string>>)["**"], {
-    access: "$all",
-    publish: "$all",
-    unpublish: "$all"
-  });
 }
 
 async function runProjectContractTests(): Promise<void> {
@@ -296,8 +261,8 @@ async function runProjectContractTests(): Promise<void> {
       rootDir: path.resolve(parseFixture),
       persistent: false,
       offline: false,
-      useAres: false,
       aresShadowUrl: undefined,
+      aresStrictParity: false,
       packageManager: undefined,
       scriptName: "dev",
       installMode: "always",
@@ -311,8 +276,8 @@ async function runProjectContractTests(): Promise<void> {
       rootDir: path.resolve(parseFixture),
       persistent: false,
       offline: false,
-      useAres: false,
       aresShadowUrl: undefined,
+      aresStrictParity: false,
       packageManager: "pnpm",
       scriptName: undefined,
       installMode: "auto",
@@ -321,7 +286,8 @@ async function runProjectContractTests(): Promise<void> {
       childArgs: ["--watch"]
     });
 
-    assert.equal(parseCommand(["install", "--cwd", parseFixture, "--use-ares"]).useAres, true);
+    assert.throws(() => parseCommand(["install", "--cwd", parseFixture, "--runtime-legacy"]), /Unknown option/);
+    assert.equal(parseCommand(["install", "--cwd", parseFixture, "--ares-strict-parity"]).aresStrictParity, true);
     assert.equal(
       parseCommand(["install", "--cwd", parseFixture, "--ares-shadow-url", "http://127.0.0.1:4873"]).aresShadowUrl,
       "http://127.0.0.1:4873"
@@ -404,7 +370,7 @@ async function runRuntimeSmokeTests(): Promise<void> {
     });
 
     await proveFailureSafety(npmBase, npmFail);
-    await proveStatusHandshakeStability(npmBase);
+    await proveStatusStability(npmBase);
     await proveOwnedInterruptionCleanup(npmInterrupt);
     await proveReusedInterruptionCleanup(npmInterrupt);
     await proveManagerCompatibility(smokeRoot, npmBase, pnpmBase, yarnBase, pnpmFail, yarnFail);
@@ -416,25 +382,6 @@ async function runRuntimeSmokeTests(): Promise<void> {
 
 async function proveFailureSafety(npmBase: string, npmFail: string): Promise<void> {
   console.log("Self-test: failure safety");
-  const workerFailure = runCli(["start", "--cwd", npmBase], {
-    env: {
-      [WORKER_MODE_ENV]: "fail"
-    }
-  });
-  assert.notEqual(workerFailure.exitCode, 0);
-  assert.match(workerFailure.output, /Registry worker exited before signaling readiness|Failed to start Package Ninja session/);
-  await assertSessionCleared(npmBase);
-
-  const timeoutFailure = runCli(["start", "--cwd", npmBase], {
-    env: {
-      [WORKER_MODE_ENV]: "stall-ready",
-      [READY_TIMEOUT_ENV]: "1000"
-    }
-  });
-  assert.notEqual(timeoutFailure.exitCode, 0);
-  assert.match(timeoutFailure.output, /Registry readiness timed out|Failed to start Package Ninja session/);
-  await assertSessionCleared(npmBase);
-
   const failedTest = runCli(["test", "--cwd", npmFail]);
   assert.equal(failedTest.exitCode, 7);
   await assertSessionCleared(npmFail);
@@ -444,8 +391,8 @@ async function proveFailureSafety(npmBase: string, npmFail: string): Promise<voi
   await assertSessionCleared(npmFail);
 }
 
-async function proveStatusHandshakeStability(projectDir: string): Promise<void> {
-  console.log("Self-test: status handshake stability");
+async function proveStatusStability(projectDir: string): Promise<void> {
+  console.log("Self-test: status stability");
   const startResult = runCli(["start", "--cwd", projectDir]);
   assert.equal(startResult.exitCode, 0);
   await waitForSessionRunning(projectDir);
@@ -497,7 +444,7 @@ async function proveOwnedInterruptionCleanup(npmInterrupt: string): Promise<void
     await assertSessionCleared(npmInterrupt);
     await assertPidStoppedFromFile(probe.appPidPath, `${scenario.label} app child`);
     await assertPidStoppedFromFile(probe.workerPidPath, `${scenario.label} command worker`);
-    await assertPidStoppedFromFile(probe.sessionPidPath, `${scenario.label} registry worker`);
+    await assertPidStoppedFromFile(probe.sessionPidPath, `${scenario.label} runtime worker`);
     await assertDirectoryUnlocked(npmInterrupt);
     await assertNoLeakedTempRuntimeDirs(beforeRuntimeDirs, `${scenario.label} interruption`);
   }

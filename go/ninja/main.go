@@ -1,10 +1,11 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,13 +15,13 @@ import (
 )
 
 const (
-	handshakeAttemptTimeout = 5 * time.Millisecond
-	handshakeBudget         = 30 * time.Millisecond
-	handshakeAttempts       = 3
+	healthAttemptTimeout = 20 * time.Millisecond
+	healthBudget         = 90 * time.Millisecond
+	healthAttempts       = 3
 )
 
 type sessionState struct {
-	HandshakeEndpoint string `json:"handshakeEndpoint"`
+	HealthcheckURL string `json:"healthcheckUrl"`
 }
 
 func main() {
@@ -39,7 +40,7 @@ func run() error {
 		return err
 	}
 
-	if hasState && pingHandshakeWithRetry(state.HandshakeEndpoint) {
+	if hasState && pingHealthcheckWithRetry(state.HealthcheckURL) {
 		workerPath, err := resolveGoWorkerPath()
 		if err != nil {
 			return err
@@ -65,7 +66,6 @@ func resolveProjectRoot(args []string) string {
 		return "."
 	}
 
-	// Keep routing intentionally minimal. We only honor --cwd/--root.
 	for idx := 0; idx < len(args)-1; idx++ {
 		option := args[idx]
 		if option != "--cwd" && option != "--root" {
@@ -107,32 +107,32 @@ func readState(projectRoot string) (sessionState, bool, error) {
 		return sessionState{}, false, nil
 	}
 
-	if strings.TrimSpace(state.HandshakeEndpoint) == "" {
+	if strings.TrimSpace(state.HealthcheckURL) == "" {
 		return sessionState{}, false, nil
 	}
 
 	return state, true, nil
 }
 
-func pingHandshakeWithRetry(endpoint string) bool {
-	deadline := time.Now().Add(handshakeBudget)
+func pingHealthcheckWithRetry(url string) bool {
+	deadline := time.Now().Add(healthBudget)
 
-	for attempt := 0; attempt < handshakeAttempts; attempt++ {
+	for attempt := 0; attempt < healthAttempts; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return false
 		}
 
-		timeout := handshakeAttemptTimeout
+		timeout := healthAttemptTimeout
 		if remaining < timeout {
 			timeout = remaining
 		}
 
-		if pingHandshakeOnce(endpoint, timeout) {
+		if pingHealthcheckOnce(url, timeout) {
 			return true
 		}
 
-		if attempt == handshakeAttempts-1 {
+		if attempt == healthAttempts-1 {
 			break
 		}
 
@@ -152,28 +152,27 @@ func pingHandshakeWithRetry(endpoint string) bool {
 	return false
 }
 
-func pingHandshakeOnce(endpoint string, timeout time.Duration) bool {
-	if strings.TrimSpace(endpoint) == "" {
+func pingHealthcheckOnce(url string, timeout time.Duration) bool {
+	if strings.TrimSpace(url) == "" {
 		return false
 	}
 
-	conn, err := dialHandshake(endpoint, timeout)
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-	_ = conn.SetDeadline(time.Now().Add(timeout))
-	if _, err := conn.Write([]byte("ping\n")); err != nil {
-		return false
-	}
-
-	response, err := bufio.NewReader(conn).ReadString('\n')
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false
 	}
 
-	return strings.EqualFold(strings.TrimSpace(response), "pong")
+	client := http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode >= 200 && resp.StatusCode < 400
 }
 
 func retryJitter(attempt int) time.Duration {

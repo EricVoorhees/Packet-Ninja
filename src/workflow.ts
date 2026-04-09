@@ -67,7 +67,8 @@ export async function executeProjectCommand(
   reportState(reporter, "session.preparing", {
     persistent: options.persistent,
     offline: options.offline,
-    runtime: options.useAres ? "ares" : "verdaccio"
+    runtime: "ares",
+    strictParity: options.aresStrictParity
   });
 
   const lease = await runSpinnerTask(
@@ -78,8 +79,8 @@ export async function executeProjectCommand(
         port: options.port,
         persistent: options.persistent,
         offline: options.offline,
-        useAres: options.useAres,
-        aresShadowUrl: options.aresShadowUrl
+        aresShadowUrl: options.aresShadowUrl,
+        aresStrictParity: options.aresStrictParity
       }),
     {
       fallbackLine: reporter.line.bind(reporter),
