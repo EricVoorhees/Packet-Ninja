@@ -163,6 +163,7 @@ Deep dive docs:
 - [`docs/performance-deep-dive.md`](docs/performance-deep-dive.md)
 - [`docs/startup-architecture-options.md`](docs/startup-architecture-options.md)
 - [`docs/phase2-go-harness-spec.md`](docs/phase2-go-harness-spec.md)
+- [`docs/phase3-ares-engine-plan.md`](docs/phase3-ares-engine-plan.md)
 
 ## Session States and CLI Output
 

@@ -13,9 +13,11 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:go-ares": "node scripts/build-go-ares.mjs",
     "build:go-worker": "node scripts/build-go-worker.mjs",
     "dev": "tsx src/cli.ts",
-    "test": "npm run build && node dist/selftest.js"
+    "test": "npm run build && node dist/selftest.js",
+    "test:go-ares": "go test -C go/ares ./..."
   },
   "keywords": [
     "package-ninja",
