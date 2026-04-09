@@ -102,7 +102,7 @@ Allowed transitions:
 ## Rollout Plan
 
 1. **Stage A (Now)**: Ares alpha module in-repo (`go/ares`) with tests.
-2. **Stage B**: Hybrid selectable runtime in development only.
+2. **Stage B**: Hybrid selectable runtime in CLI (`--use-ares`) with Verdaccio default retained.
 3. **Stage C**: Shadow-mode parity soak against Verdaccio behavior.
 4. **Stage D**: Controlled default migration after parity + reliability gates pass.
 
@@ -114,6 +114,6 @@ Allowed transitions:
 - [x] Initial request collapse coordinator in code
 - [x] CAS and metadata persistence scaffolding in code
 - [ ] Full registry route parity validation suite
-- [ ] Hybrid runtime toggle integration in production CLI path
+- [x] Hybrid runtime toggle integration in CLI path (`--use-ares`)
 - [ ] Shadow parity report tooling
 - [ ] Cutover readiness review

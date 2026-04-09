@@ -106,6 +106,12 @@ package-ninja stop
 
 # Publish under local session safety rules
 package-ninja publish -- --tag next
+
+# Run install through the Ares runtime (alpha)
+package-ninja install --use-ares
+
+# Optional Ares shadow probe target for parity checks
+package-ninja install --use-ares --ares-shadow-url http://127.0.0.1:4873
 ```
 
 ## Key Flags
@@ -115,6 +121,8 @@ package-ninja publish -- --tag next
 - `--script <name>` script override for `dev`/`test`
 - `--install` force install before `dev`
 - `--no-install` skip install before `dev`
+- `--use-ares` use the native Ares runtime for session startup
+- `--ares-shadow-url <url>` optional shadow target for Ares parity probes
 - `--port <number>` preferred local registry port
 - `--persistent` keep a reusable session running
 - `--offline` disable npmjs uplink
@@ -261,8 +269,9 @@ If the fast path is unavailable or unhealthy, execution falls back to the Node p
 ## V2/V3 Status
 
 - **Phase 2 (Go harness):** complete and reliability-hardened.
-- **Current recommendation:** short real-world soak period before starting full registry-engine replacement.
-- **Phase 3 (registry core rewrite):** optional next step, not required for current production reliability.
+- **Phase 3 Stage A/B:** Ares engine alpha is live in-repo, and `--use-ares` now runs installs through Ares.
+- **Current recommendation:** continue parity-focused hardening before default cutover.
+- **Current cutover policy:** Verdaccio remains the default runtime; Ares is explicit opt-in.
 
 ## Local Development
 

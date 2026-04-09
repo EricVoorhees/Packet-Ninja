@@ -8,7 +8,10 @@ export interface SessionState {
   pid: number;
   port: number;
   registryUrl: string;
+  runtimeKind?: "verdaccio" | "ares";
   handshakeEndpoint?: string;
+  healthcheckUrl?: string;
+  shadowRegistryUrl?: string;
   rootDir: string;
   runtimeDir: string;
   storageDir: string;

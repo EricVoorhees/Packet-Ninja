@@ -296,6 +296,8 @@ async function runProjectContractTests(): Promise<void> {
       rootDir: path.resolve(parseFixture),
       persistent: false,
       offline: false,
+      useAres: false,
+      aresShadowUrl: undefined,
       packageManager: undefined,
       scriptName: "dev",
       installMode: "always",
@@ -309,6 +311,8 @@ async function runProjectContractTests(): Promise<void> {
       rootDir: path.resolve(parseFixture),
       persistent: false,
       offline: false,
+      useAres: false,
+      aresShadowUrl: undefined,
       packageManager: "pnpm",
       scriptName: undefined,
       installMode: "auto",
@@ -316,6 +320,12 @@ async function runProjectContractTests(): Promise<void> {
       childCommand: undefined,
       childArgs: ["--watch"]
     });
+
+    assert.equal(parseCommand(["install", "--cwd", parseFixture, "--use-ares"]).useAres, true);
+    assert.equal(
+      parseCommand(["install", "--cwd", parseFixture, "--ares-shadow-url", "http://127.0.0.1:4873"]).aresShadowUrl,
+      "http://127.0.0.1:4873"
+    );
 
     assert.throws(() => parseCommand(["test", "--install"]), /only apply to `package-ninja dev`/);
     assert.throws(

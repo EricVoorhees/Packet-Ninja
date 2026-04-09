@@ -15,6 +15,8 @@ interface ParsedCommand {
   rootDir: string;
   persistent: boolean;
   offline: boolean;
+  useAres: boolean;
+  aresShadowUrl?: string;
   packageManager?: PackageManager;
   scriptName?: string;
   installMode: InstallMode;
@@ -72,6 +74,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
+          useAres: parsed.useAres,
+          aresShadowUrl: parsed.aresShadowUrl,
           packageManager: parsed.packageManager,
           installMode: parsed.installMode,
           passthroughArgs: parsed.childArgs,
@@ -92,6 +96,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
+          useAres: parsed.useAres,
+          aresShadowUrl: parsed.aresShadowUrl,
           packageManager: parsed.packageManager,
           scriptName: parsed.scriptName,
           installMode: parsed.installMode,
@@ -113,6 +119,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
+          useAres: parsed.useAres,
+          aresShadowUrl: parsed.aresShadowUrl,
           packageManager: parsed.packageManager,
           scriptName: parsed.scriptName,
           installMode: parsed.installMode,
@@ -134,6 +142,8 @@ export async function main(): Promise<void> {
           rootDir: parsed.rootDir,
           persistent: parsed.persistent,
           offline: parsed.offline,
+          useAres: parsed.useAres,
+          aresShadowUrl: parsed.aresShadowUrl,
           packageManager: parsed.packageManager,
           installMode: parsed.installMode,
           passthroughArgs: parsed.childArgs,
@@ -198,6 +208,8 @@ export function parseCommand(argv: string[]): ParsedCommand {
   let rootDir = process.cwd();
   let persistent = false;
   let offline = false;
+  let useAres = process.env.PACKAGE_NINJA_USE_ARES === "1";
+  let aresShadowUrl = process.env.PACKAGE_NINJA_ARES_SHADOW_URL;
   let packageManager: PackageManager | undefined;
   let scriptName: string | undefined;
   let installMode: InstallMode = "auto";
@@ -240,6 +252,22 @@ export function parseCommand(argv: string[]): ParsedCommand {
 
     if (option === "--offline") {
       offline = true;
+      continue;
+    }
+
+    if (option === "--use-ares") {
+      useAres = true;
+      continue;
+    }
+
+    if (option === "--ares-shadow-url") {
+      const value = optionArgs[index + 1];
+      if (!value) {
+        throw new Error("Expected a URL after --ares-shadow-url.");
+      }
+
+      aresShadowUrl = value;
+      index += 1;
       continue;
     }
 
@@ -293,6 +321,8 @@ export function parseCommand(argv: string[]): ParsedCommand {
     rootDir,
     persistent,
     offline,
+    useAres,
+    aresShadowUrl,
     packageManager,
     scriptName,
     installMode,
@@ -321,12 +351,12 @@ Usage
   package-ninja <command> [options] [-- <args>]
 
 Commands
-  package-ninja start [--cwd <path>]
-  package-ninja run [--cwd <path>] -- <command>
-  package-ninja install [--cwd <path>] [--pm npm|pnpm|yarn] [-- <args>]
-  package-ninja dev [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [--install|--no-install] [-- <args>]
-  package-ninja test [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [-- <args>]
-  package-ninja publish [--cwd <path>] [--pm npm|pnpm|yarn] [-- <args>]
+  package-ninja start [--cwd <path>] [--use-ares] [--ares-shadow-url <url>]
+  package-ninja run [--cwd <path>] [--use-ares] [--ares-shadow-url <url>] -- <command>
+  package-ninja install [--cwd <path>] [--pm npm|pnpm|yarn] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
+  package-ninja dev [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [--install|--no-install] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
+  package-ninja test [--cwd <path>] [--pm npm|pnpm|yarn] [--script <name>] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
+  package-ninja publish [--cwd <path>] [--pm npm|pnpm|yarn] [--use-ares] [--ares-shadow-url <url>] [-- <args>]
   package-ninja status [--cwd <path>]
   package-ninja stop [--cwd <path>]
   package-ninja help
@@ -337,6 +367,8 @@ Flags
   --script <name>              Override script name for dev/test
   --install                    Force install before dev
   --no-install                 Skip install before dev
+  --use-ares                   Use the native Ares runtime instead of Verdaccio
+  --ares-shadow-url <url>      Optional shadow target URL for Ares parity probes
   --port <number>              Preferred local registry port
   --persistent                 Keep a reusable local session after command completion
   --offline                    Disable npmjs uplink
@@ -351,6 +383,8 @@ Examples
   package-ninja dev --script dev:frontend --cwd apps\\web
   package-ninja test -- --watch
   package-ninja publish -- --tag next
+  package-ninja install --use-ares
+  package-ninja install --use-ares --ares-shadow-url http://127.0.0.1:4873
   package-ninja run -- pnpm test
   package-ninja stop`);
 }
@@ -383,6 +417,14 @@ function normalizeErrorMessage(message: string): string {
   }
 
   if (message.includes("Registry readiness timed out.")) {
+    return "Failed to start Package Ninja session.";
+  }
+
+  if (message.includes("Ares readiness timed out.")) {
+    return "Failed to start Package Ninja session.";
+  }
+
+  if (message.includes("Ares worker exited before signaling readiness.")) {
     return "Failed to start Package Ninja session.";
   }
 

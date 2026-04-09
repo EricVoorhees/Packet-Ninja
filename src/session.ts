@@ -16,6 +16,8 @@ export interface SessionOptions {
   port?: number;
   persistent: boolean;
   offline: boolean;
+  useAres: boolean;
+  aresShadowUrl?: string;
 }
 
 export interface SessionStatus {
@@ -46,9 +48,17 @@ const FOREGROUND_PARENT_PID_ENV = "PACKAGE_NINJA_INTERNAL_FOREGROUND_PARENT_PID"
 const REGISTRY_SIGNAL_ENV = "VER" + "DACCIO_HANDLE_KILL_SIGNALS";
 const USE_GO_RUNNER_ENV = "PACKAGE_NINJA_USE_GO_RUNNER";
 const GO_WORKER_PATH_ENV = "PACKAGE_NINJA_GO_WORKER_PATH";
+const USE_ARES_RUNTIME_ENV = "PACKAGE_NINJA_USE_ARES";
+const ARES_BINARY_ENV = "PACKAGE_NINJA_ARES_PATH";
+const ARES_LISTEN_ENV = "PACKAGE_NINJA_ARES_LISTEN";
+const ARES_UPSTREAM_ENV = "PACKAGE_NINJA_ARES_UPSTREAM";
+const ARES_DATA_DIR_ENV = "PACKAGE_NINJA_ARES_DATA_DIR";
+const ARES_SHADOW_URL_ENV = "PACKAGE_NINJA_ARES_SHADOW_URL";
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 200;
 const DEFAULT_HANDSHAKE_RETRIES = 3;
 const HANDSHAKE_TIMEOUT_ENV = "PACKAGE_NINJA_INTERNAL_HANDSHAKE_TIMEOUT_MS";
+const DEFAULT_ARES_HEALTH_TIMEOUT_MS = 500;
+const ARES_HEALTH_TIMEOUT_ENV = "PACKAGE_NINJA_INTERNAL_ARES_HEALTH_TIMEOUT_MS";
 
 export async function startSession(options: SessionOptions): Promise<SessionState> {
   const paths = resolveProjectPaths(options.rootDir);
@@ -69,31 +79,66 @@ export async function startSession(options: SessionOptions): Promise<SessionStat
   const npmrcPath = path.join(runtimeDir, ".npmrc");
   const logPath = path.join(runtimeDir, "package-ninja-registry.log");
   const readyPath = path.join(runtimeDir, "ready.json");
-  const handshakeEndpoint = resolveHandshakeEndpoint();
+  const runtimeKind = resolveRuntimeKind(options);
+  const handshakeEndpoint = runtimeKind === "verdaccio" ? resolveHandshakeEndpoint() : undefined;
   const port = options.port ?? (await choosePort(0));
   const registryUrl = `http://127.0.0.1:${port}`;
 
   await mkdir(runtimeDir, { recursive: true });
   await rm(readyPath, { force: true }).catch(() => {});
-  const configPath = await writeRegistryConfig({
-    runtimeDir,
-    storageDir,
-    port,
-    offline: options.offline
-  });
+  let configPath = path.join(runtimeDir, "package-ninja.runtime.config.json");
+  if (runtimeKind === "verdaccio") {
+    configPath = await writeRegistryConfig({
+      runtimeDir,
+      storageDir,
+      port,
+      offline: options.offline
+    });
+  } else {
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          runtimeKind: "ares",
+          port,
+          registryUrl,
+          storageDir,
+          offline: options.offline,
+          shadowRegistryUrl: options.aresShadowUrl ?? process.env[ARES_SHADOW_URL_ENV] ?? null
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+  }
 
   await writeNpmRc(npmrcPath, registryUrl);
-  const child = await launchRegistryWorker({
-    configPath,
-    logPath,
-    readyPath,
-    handshakeEndpoint,
-    rootDir: options.rootDir,
-    port
-  });
+  const child =
+    runtimeKind === "ares"
+      ? await launchAresWorker({
+          logPath,
+          rootDir: options.rootDir,
+          port,
+          storageDir,
+          offline: options.offline,
+          shadowUrl: options.aresShadowUrl
+        })
+      : await launchRegistryWorker({
+          configPath,
+          logPath,
+          readyPath,
+          handshakeEndpoint: handshakeEndpoint ?? resolveHandshakeEndpoint(),
+          rootDir: options.rootDir,
+          port
+        });
 
   try {
-    await waitForReady(child, readyPath, logPath, child.pid ?? -1, port);
+    if (runtimeKind === "ares") {
+      await waitForAresReady(child, resolveHealthcheckUrl(port), logPath);
+    } else {
+      await waitForReady(child, readyPath, logPath, child.pid ?? -1, port);
+    }
   } catch (error) {
     await stopChildProcess(child);
     await cleanupFailedStartup(runtimeDir, options.persistent);
@@ -104,7 +149,10 @@ export async function startSession(options: SessionOptions): Promise<SessionStat
     pid: child.pid ?? -1,
     port,
     registryUrl,
+    runtimeKind,
     handshakeEndpoint,
+    healthcheckUrl: runtimeKind === "ares" ? resolveHealthcheckUrl(port) : undefined,
+    shadowRegistryUrl: runtimeKind === "ares" ? options.aresShadowUrl ?? process.env[ARES_SHADOW_URL_ENV] : undefined,
     rootDir: options.rootDir,
     runtimeDir,
     storageDir,
@@ -242,6 +290,7 @@ export function formatStatus(status: SessionStatus): string {
     "🔐 Package Ninja active",
     `→ Registry: ${status.state.registryUrl}`,
     `→ PID: ${status.state.pid}`,
+    `→ Runtime: ${status.state.runtimeKind ?? "verdaccio"}`,
     `→ Mode: ${status.state.persistent ? "persistent" : "ephemeral"}`,
     `→ Proxy: ${status.state.offline ? "offline only" : "npmjs uplink enabled"}`
   ];
@@ -274,28 +323,65 @@ async function startForegroundSession(options: SessionOptions): Promise<Foregrou
   const logPath = path.join(runtimeDir, "package-ninja-registry.log");
   const npmrcPath = path.join(runtimeDir, ".npmrc");
   const readyPath = path.join(runtimeDir, "ready.json");
-  const handshakeEndpoint = resolveHandshakeEndpoint();
-  const configPath = await writeRegistryConfig({
-    runtimeDir,
-    storageDir,
-    port,
-    offline: options.offline
-  });
+  const runtimeKind = resolveRuntimeKind(options);
+  const handshakeEndpoint = runtimeKind === "verdaccio" ? resolveHandshakeEndpoint() : undefined;
+  await mkdir(runtimeDir, { recursive: true });
+  let configPath = path.join(runtimeDir, "package-ninja.runtime.config.json");
+  if (runtimeKind === "verdaccio") {
+    configPath = await writeRegistryConfig({
+      runtimeDir,
+      storageDir,
+      port,
+      offline: options.offline
+    });
+  } else {
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          runtimeKind: "ares",
+          port,
+          registryUrl,
+          storageDir,
+          offline: options.offline,
+          shadowRegistryUrl: options.aresShadowUrl ?? process.env[ARES_SHADOW_URL_ENV] ?? null
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+  }
 
   await writeNpmRc(npmrcPath, registryUrl);
   await rm(readyPath, { force: true }).catch(() => {});
-  const child = await launchRegistryWorker({
-    configPath,
-    logPath,
-    rootDir: options.rootDir,
-    readyPath,
-    handshakeEndpoint,
-    port,
-    detached: false
-  });
+  const child =
+    runtimeKind === "ares"
+      ? await launchAresWorker({
+          logPath,
+          rootDir: options.rootDir,
+          port,
+          storageDir,
+          offline: options.offline,
+          shadowUrl: options.aresShadowUrl,
+          detached: false
+        })
+      : await launchRegistryWorker({
+          configPath,
+          logPath,
+          rootDir: options.rootDir,
+          readyPath,
+          handshakeEndpoint: handshakeEndpoint ?? resolveHandshakeEndpoint(),
+          port,
+          detached: false
+        });
 
   try {
-    await waitForReady(child, readyPath, logPath, child.pid ?? -1, port);
+    if (runtimeKind === "ares") {
+      await waitForAresReady(child, resolveHealthcheckUrl(port), logPath);
+    } else {
+      await waitForReady(child, readyPath, logPath, child.pid ?? -1, port);
+    }
   } catch (error) {
     await stopChildProcess(child);
     await cleanupFailedStartup(runtimeDir, options.persistent);
@@ -311,7 +397,10 @@ async function startForegroundSession(options: SessionOptions): Promise<Foregrou
     pid: child.pid ?? -1,
     port,
     registryUrl,
+    runtimeKind,
     handshakeEndpoint,
+    healthcheckUrl: runtimeKind === "ares" ? resolveHealthcheckUrl(port) : undefined,
+    shadowRegistryUrl: runtimeKind === "ares" ? options.aresShadowUrl ?? process.env[ARES_SHADOW_URL_ENV] : undefined,
     rootDir: options.rootDir,
     runtimeDir,
     storageDir,
@@ -366,7 +455,8 @@ async function runChildCommand(
     NPM_CONFIG_REGISTRY: registryUrl,
     npm_config_userconfig: npmrcPath,
     NPM_CONFIG_USERCONFIG: npmrcPath,
-    YARN_NPM_REGISTRY_SERVER: registryUrl
+    YARN_NPM_REGISTRY_SERVER: registryUrl,
+    BUN_CONFIG_REGISTRY: registryUrl
   };
 
   await writeFile(
@@ -550,12 +640,34 @@ interface LaunchOptions {
   detached?: boolean;
 }
 
+interface AresLaunchOptions {
+  logPath: string;
+  rootDir: string;
+  port: number;
+  storageDir: string;
+  offline: boolean;
+  shadowUrl?: string;
+  detached?: boolean;
+}
+
 function resolveRuntimeDir(workspaceDir: string, persistent: boolean): string {
   if (persistent) {
     return path.join(workspaceDir, "persistent");
   }
 
   return path.join(os.tmpdir(), "package-ninja", randomUUID());
+}
+
+function resolveRuntimeKind(options: SessionOptions): "verdaccio" | "ares" {
+  if (options.useAres || process.env[USE_ARES_RUNTIME_ENV] === "1") {
+    return "ares";
+  }
+
+  return "verdaccio";
+}
+
+function resolveHealthcheckUrl(port: number): string {
+  return `http://127.0.0.1:${port}/-/health`;
 }
 
 function resolveHandshakeEndpoint(): string {
@@ -567,6 +679,20 @@ function resolveHandshakeEndpoint(): string {
 }
 
 async function isSessionResponsive(state: SessionState): Promise<boolean> {
+  if ((state.runtimeKind ?? "verdaccio") === "ares") {
+    if (!state.healthcheckUrl) {
+      return true;
+    }
+
+    for (let attempt = 0; attempt < DEFAULT_HANDSHAKE_RETRIES; attempt += 1) {
+      if (await pingHealthcheckUrl(state.healthcheckUrl, readAresHealthTimeout())) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   if (!state.handshakeEndpoint) {
     return true;
   }
@@ -624,6 +750,26 @@ async function pingHandshakeEndpoint(endpoint: string, timeoutMs: number): Promi
   });
 }
 
+async function pingHealthcheckUrl(url: string, timeoutMs: number): Promise<boolean> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, timeoutMs);
+  timeout.unref();
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      signal: abortController.signal
+    });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function launchRegistryWorker(options: LaunchOptions): Promise<ChildProcess> {
   const workerPath = fileURLToPath(new URL("./registry-worker.js", import.meta.url));
 
@@ -658,6 +804,79 @@ async function launchRegistryWorker(options: LaunchOptions): Promise<ChildProces
     await logFile.close();
     throw error;
   }
+}
+
+async function launchAresWorker(options: AresLaunchOptions): Promise<ChildProcess> {
+  const aresPath = await resolveAresBinaryPath();
+
+  await mkdir(path.dirname(options.logPath), { recursive: true });
+  await mkdir(options.storageDir, { recursive: true });
+
+  const logFile = await open(options.logPath, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY, 0o666);
+  const listenAddress = `127.0.0.1:${options.port}`;
+  const upstreamUrl = resolveAresUpstream(options);
+
+  try {
+    const child = spawn(aresPath, [], {
+      cwd: options.rootDir,
+      detached: options.detached ?? true,
+      stdio: ["ignore", logFile.fd, logFile.fd],
+      windowsHide: process.platform === "win32",
+      env: {
+        ...process.env,
+        [ARES_LISTEN_ENV]: listenAddress,
+        [ARES_DATA_DIR_ENV]: options.storageDir,
+        [ARES_UPSTREAM_ENV]: upstreamUrl,
+        [ARES_SHADOW_URL_ENV]: options.shadowUrl ?? process.env[ARES_SHADOW_URL_ENV] ?? ""
+      }
+    });
+
+    await logFile.close();
+
+    if (options.detached ?? true) {
+      child.unref();
+    }
+
+    return child;
+  } catch (error) {
+    await logFile.close();
+    throw error;
+  }
+}
+
+function resolveAresUpstream(options: AresLaunchOptions): string {
+  const explicitUpstream = process.env[ARES_UPSTREAM_ENV];
+  if (explicitUpstream) {
+    return explicitUpstream;
+  }
+
+  if (options.offline) {
+    return "http://127.0.0.1:9";
+  }
+
+  return "https://registry.npmjs.org";
+}
+
+async function resolveAresBinaryPath(): Promise<string> {
+  const explicitPath = process.env[ARES_BINARY_ENV];
+  if (explicitPath && (await pathExists(explicitPath))) {
+    return explicitPath;
+  }
+
+  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const candidates = [
+    path.join(packageRoot, "bin", process.platform === "win32" ? "ares-registry.exe" : "ares-registry"),
+    path.join(packageRoot, "bin", "ares-registry.exe"),
+    path.join(packageRoot, "bin", "ares-registry")
+  ];
+
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error('Ares runtime binary not found. Build it with "npm run build:go-ares".');
 }
 
 async function writeNpmRc(npmrcPath: string, registryUrl: string): Promise<void> {
@@ -716,6 +935,26 @@ async function waitForReady(
   }
 
   throw new Error(await renderStartupFailure(logPath, "Registry readiness timed out."));
+}
+
+async function waitForAresReady(child: ChildProcess, healthcheckUrl: string, logPath: string): Promise<void> {
+  const startedAt = Date.now();
+  const timeoutMs = readReadyTimeout();
+  const healthTimeoutMs = readAresHealthTimeout();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(await renderStartupFailure(logPath, "Ares worker exited before signaling readiness."));
+    }
+
+    if (await pingHealthcheckUrl(healthcheckUrl, healthTimeoutMs)) {
+      return;
+    }
+
+    await delay(120);
+  }
+
+  throw new Error(await renderStartupFailure(logPath, "Ares readiness timed out."));
 }
 
 function parseReadyPayload(raw: string): ReadyPayload | null {
@@ -908,6 +1147,20 @@ function readHandshakeTimeout(): number {
   const timeoutMs = Number.parseInt(raw, 10);
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
     return DEFAULT_HANDSHAKE_TIMEOUT_MS;
+  }
+
+  return timeoutMs;
+}
+
+function readAresHealthTimeout(): number {
+  const raw = process.env[ARES_HEALTH_TIMEOUT_ENV];
+  if (!raw) {
+    return DEFAULT_ARES_HEALTH_TIMEOUT_MS;
+  }
+
+  const timeoutMs = Number.parseInt(raw, 10);
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_ARES_HEALTH_TIMEOUT_MS;
   }
 
   return timeoutMs;

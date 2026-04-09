@@ -112,7 +112,7 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isMetadataPath(r.URL.EscapedPath()) && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+	if isMetadataPath(r.URL.EscapedPath()) && r.Method == http.MethodGet {
 		e.handleMetadata(w, r)
 		return
 	}
@@ -180,6 +180,8 @@ func (e *Engine) handleMetadata(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream request build failed", http.StatusInternalServerError)
 		return
 	}
+	// Persist plain JSON payloads in cache to avoid replaying compressed bodies without encoding headers.
+	upstreamReq.Header.Set("Accept-Encoding", "identity")
 
 	if hasCache {
 		if entry.ETag != "" {
