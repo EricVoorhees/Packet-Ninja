@@ -184,7 +184,9 @@ export async function main(): Promise<void> {
 }
 
 export function parseCommand(argv: string[]): ParsedCommand {
-  const commandName = (argv[0] ?? "help") as CommandName;
+  const rawCommand = argv[0] ?? "help";
+  const normalizedCommand = rawCommand === "--help" || rawCommand === "-h" ? "help" : rawCommand;
+  const commandName = normalizedCommand as CommandName;
   const supportedCommands: CommandName[] = [
     "start",
     "run",
@@ -198,7 +200,7 @@ export function parseCommand(argv: string[]): ParsedCommand {
   ];
 
   if (!supportedCommands.includes(commandName)) {
-    throw new Error(`Unknown command: ${argv[0]}`);
+    throw new Error(`Unknown command: ${rawCommand}`);
   }
 
   const separatorIndex = argv.indexOf("--");
