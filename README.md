@@ -164,6 +164,12 @@ npm run build
 npm test
 ```
 
+## Release and publish
+
+Use the publish runbook:
+
+`docs/NPM_PUBLISH.md`
+
 Optional Go builds:
 
 ```bash
